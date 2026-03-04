@@ -64,7 +64,7 @@ type PipelineTask struct {
 	Attempt       int                `json:"attempt"`
 	StartedAt     *time.Time         `json:"started_at,omitempty"`
 	CompletedAt   *time.Time         `json:"completed_at,omitempty"`
-	DurationMs    int                `json:"duration_ms,omitempty"`
+	DurationMs    *int               `json:"duration_ms,omitempty"`
 	Error         *string            `json:"error,omitempty"`
 	SortOrder     int                `json:"sort_order"`
 }

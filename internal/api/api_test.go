@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 
 	"github.com/neuco-ai/neuco/internal/api"
 	mw "github.com/neuco-ai/neuco/internal/api/middleware"
@@ -159,6 +160,15 @@ func runMigrations(t *testing.T, pool *pgxpool.Pool) {
 	}
 	if _, err := pool.Exec(ctx, string(migration5)); err != nil {
 		t.Fatalf("failed to run migration 000005: %v", err)
+	}
+
+	// River queue tables (required for river.Insert calls in handlers).
+	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		t.Fatalf("failed to create river migrator: %v", err)
+	}
+	if _, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil); err != nil {
+		t.Fatalf("failed to run river migrations: %v", err)
 	}
 }
 
@@ -507,7 +517,7 @@ func TestSignalUpload(t *testing.T) {
 	}
 
 	t.Run("upload_csv_signals", func(t *testing.T) {
-		csvData := "content,type,source\n\"Users want dark mode\",feature_request,manual\n\"Login page crashes on Safari\",bug_report,manual"
+		csvData := "content,type,source\n\"Users want dark mode\",feature_request,csv\n\"Login page crashes on Safari\",bug_report,csv"
 
 		var buf bytes.Buffer
 		writer := multipart.NewWriter(&buf)
@@ -611,9 +621,12 @@ func TestSpecGeneration(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		body := readBody(t, resp)
-		var candidates []map[string]any
-		json.Unmarshal(body, &candidates)
-		if len(candidates) == 0 {
+		var page struct {
+			Candidates []map[string]any `json:"candidates"`
+			Total      int              `json:"total"`
+		}
+		json.Unmarshal(body, &page)
+		if len(page.Candidates) == 0 {
 			t.Error("expected at least one candidate")
 		}
 	})
@@ -622,15 +635,17 @@ func TestSpecGeneration(t *testing.T) {
 		// List candidates to get the ID.
 		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/candidates", nil, sd.tokenA)
 		assertStatus(t, resp, http.StatusOK)
-		var candidates []struct {
-			ID string `json:"id"`
+		var page struct {
+			Candidates []struct {
+				ID string `json:"id"`
+			} `json:"candidates"`
 		}
-		json.Unmarshal(readBody(t, resp), &candidates)
-		if len(candidates) == 0 {
+		json.Unmarshal(readBody(t, resp), &page)
+		if len(page.Candidates) == 0 {
 			t.Skip("no candidates to test spec generation")
 		}
 
-		cid := candidates[0].ID
+		cid := page.Candidates[0].ID
 		resp = doRequest(t, http.MethodPost, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/candidates/"+cid+"/spec/generate", nil, sd.tokenA)
 		// This creates a pipeline run; it may return 200, 201, or 202.
 		if resp.StatusCode >= 400 {
@@ -671,9 +686,12 @@ func TestPipelineVisibility(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		body := readBody(t, resp)
-		var pipelines []map[string]any
-		json.Unmarshal(body, &pipelines)
-		if len(pipelines) == 0 {
+		var page struct {
+			Runs  []map[string]any `json:"runs"`
+			Total int              `json:"total"`
+		}
+		json.Unmarshal(body, &page)
+		if len(page.Runs) == 0 {
 			t.Error("expected at least one pipeline run")
 		}
 	})
