@@ -21,6 +21,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/riverqueue/river"
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
+	"github.com/riverqueue/river/rivermigrate"
 
 	"github.com/neuco-ai/neuco/internal/api"
 	mw "github.com/neuco-ai/neuco/internal/api/middleware"
@@ -162,79 +163,16 @@ func runMigrations(t *testing.T, pool *pgxpool.Pool) {
 	}
 
 	// River queue tables (required for river.Insert calls in handlers).
-	// Each statement must be executed individually because pgx v5 uses the
-	// extended query protocol which only supports single statements.
-	riverStmts := []string{
-		`DO $$ BEGIN
-			IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'river_job_state') THEN
-				CREATE TYPE river_job_state AS ENUM(
-					'available','cancelled','completed','discarded','pending','retryable','running','scheduled'
-				);
-			END IF;
-		END $$`,
-		`CREATE TABLE IF NOT EXISTS river_migration(
-			line TEXT NOT NULL DEFAULT 'main',
-			version bigint NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT NOW(),
-			PRIMARY KEY (line, version)
-		)`,
-		`CREATE TABLE IF NOT EXISTS river_job(
-			id bigserial PRIMARY KEY,
-			state river_job_state NOT NULL DEFAULT 'available',
-			attempt smallint NOT NULL DEFAULT 0,
-			max_attempts smallint NOT NULL,
-			attempted_at timestamptz,
-			created_at timestamptz NOT NULL DEFAULT NOW(),
-			finalized_at timestamptz,
-			scheduled_at timestamptz NOT NULL DEFAULT NOW(),
-			priority smallint NOT NULL DEFAULT 1,
-			args jsonb NOT NULL DEFAULT '{}',
-			attempted_by text[],
-			errors jsonb[],
-			kind text NOT NULL,
-			metadata jsonb NOT NULL DEFAULT '{}',
-			queue text NOT NULL DEFAULT 'default',
-			tags varchar(255)[] NOT NULL DEFAULT '{}',
-			unique_key bytea,
-			unique_states bit(8)
-		)`,
-		`CREATE TABLE IF NOT EXISTS river_leader(
-			elected_at timestamptz NOT NULL,
-			expires_at timestamptz NOT NULL,
-			leader_id text NOT NULL,
-			name text PRIMARY KEY DEFAULT 'default'
-		)`,
-		`CREATE TABLE IF NOT EXISTS river_queue(
-			name text PRIMARY KEY NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now(),
-			metadata jsonb NOT NULL DEFAULT '{}',
-			paused_at timestamptz,
-			updated_at timestamptz NOT NULL DEFAULT now()
-		)`,
-		`CREATE TABLE IF NOT EXISTS river_client(
-			id text PRIMARY KEY NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now(),
-			metadata jsonb NOT NULL DEFAULT '{}',
-			paused_at timestamptz,
-			updated_at timestamptz NOT NULL DEFAULT now()
-		)`,
-		`CREATE TABLE IF NOT EXISTS river_client_queue(
-			river_client_id text NOT NULL REFERENCES river_client(id) ON DELETE CASCADE,
-			name text NOT NULL,
-			created_at timestamptz NOT NULL DEFAULT now(),
-			max_workers bigint NOT NULL DEFAULT 0,
-			metadata jsonb NOT NULL DEFAULT '{}',
-			num_jobs_completed bigint NOT NULL DEFAULT 0,
-			num_jobs_running bigint NOT NULL DEFAULT 0,
-			updated_at timestamptz NOT NULL DEFAULT now(),
-			PRIMARY KEY (river_client_id, name)
-		)`,
+	// Use the official rivermigrate API to create the correct schema.
+	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
+	if err != nil {
+		t.Fatalf("failed to create river migrator: %v", err)
 	}
-	for i, stmt := range riverStmts {
-		if _, err := pool.Exec(ctx, stmt); err != nil {
-			t.Fatalf("failed to create river table (stmt %d): %v", i, err)
-		}
+	res, err := migrator.Migrate(ctx, rivermigrate.DirectionUp, nil)
+	if err != nil {
+		t.Fatalf("failed to run river migrations: %v", err)
 	}
+	t.Logf("river migrations applied: %d versions", len(res.Versions))
 }
 
 // cleanDatabase drops all application tables so each test run starts fresh.
@@ -264,6 +202,7 @@ func cleanDatabase(pool *pgxpool.Pool) {
 	for _, t := range []string{"river_client_queue", "river_client", "river_queue", "river_leader", "river_job", "river_migration"} {
 		pool.Exec(ctx, fmt.Sprintf("DROP TABLE IF EXISTS %s CASCADE", t))
 	}
+	pool.Exec(ctx, "DROP FUNCTION IF EXISTS river_job_notify CASCADE")
 	pool.Exec(ctx, "DROP TYPE IF EXISTS river_job_state CASCADE")
 	pool.Exec(ctx, "DROP EXTENSION IF EXISTS vector CASCADE")
 }
