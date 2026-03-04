@@ -1,0 +1,9 @@
+neuco-web/
+.git/
+.env
+.env.*
+*.md
+docker/
+docker-compose.yml
+fly.*.toml
+.claude/

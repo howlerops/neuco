@@ -1,0 +1,19 @@
+# Fly.io configuration for neuco-worker
+app = "neuco-worker"
+primary_region = "iad"
+
+[build]
+  dockerfile = "Dockerfile"
+  target = "worker"
+
+# Worker is a background process with no HTTP service.
+# It must stay running to poll River jobs, so we do NOT auto_stop.
+# For on-demand demos: scale to 0 manually with `fly scale count 0`
+# and back up with `fly scale count 1`.
+
+[[vm]]
+  memory = "512mb"
+  cpu_kind = "shared"
+  cpus = 1
+  auto_stop_machines = "off"
+  auto_start_machines = false

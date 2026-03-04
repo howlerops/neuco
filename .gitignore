@@ -1,0 +1,54 @@
+# Howler
+.howler-agents/
+.claude/memory.db
+
+# Go
+bin/
+*.exe
+*.test
+*.out
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Secrets
+*.pem
+*.key
+credentials.json
+service-account*.json
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Node (neuco-web)
+neuco-web/node_modules/
+neuco-web/.svelte-kit/
+neuco-web/build/
+
+# Docker
+pgdata/
+
+# Fly.io
+.fly/
+
+# Docs repo (embedded git repo)
+neuco/
+
+# Playwright MCP logs
+.playwright-mcp/
+
+# Claude / MCP local config
+.claude/
+.mcp.json
+
+# Temp
+tmp/

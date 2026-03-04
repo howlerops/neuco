@@ -1,0 +1,64 @@
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    # No host port exposed — Nango connects internally via Docker network. Main app uses Neon.
+    environment:
+      POSTGRES_USER: neuco
+      POSTGRES_PASSWORD: neuco
+      POSTGRES_DB: neuco
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./docker/init-nango-db.sql:/docker-entrypoint-initdb.d/init-nango-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U neuco -d neuco"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Redis — required by Nango for caching and job queues
+  redis:
+    image: redis:7.2-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # Nango — handles OAuth flows and API proxy for integrations
+  # Users click "Connect" → Nango handles OAuth → stores tokens → proxies API calls
+  nango-server:
+    image: nangohq/nango-server:hosted
+    ports:
+      - "3003:8080"  # Nango listens on 8080 internally
+    environment:
+      - NANGO_DB_HOST=postgres
+      - NANGO_DB_PORT=5432
+      - NANGO_DB_USER=neuco
+      - NANGO_DB_PASSWORD=neuco
+      - NANGO_DB_NAME=nango
+      - NANGO_DB_SSL=false
+      - NANGO_REDIS_URL=redis://redis:6379
+      - NANGO_SERVER_URL=http://localhost:3003
+      - NANGO_PUBLIC_SERVER_URL=http://localhost:3003
+      - NANGO_ENCRYPTION_KEY=K6G52/D0FIA+awINklnD+L8zOvWFpKobAWJ6gWNRQKc=
+      - FLAG_AUTH_ENABLED=false
+      - FLAG_SERVE_CONNECT_UI=true
+      - NANGO_DASHBOARD_USERNAME=admin
+      - NANGO_DASHBOARD_PASSWORD=admin
+      - LOG_LEVEL=info
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+
+volumes:
+  pgdata:

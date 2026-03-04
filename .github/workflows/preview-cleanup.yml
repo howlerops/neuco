@@ -1,0 +1,43 @@
+name: Preview Cleanup
+
+on:
+  pull_request:
+    types: [closed]
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+
+    steps:
+      # --- Delete Fly preview app ---
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Delete Fly preview app
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          APP_NAME="neuco-api-pr-${{ github.event.pull_request.number }}"
+          flyctl apps destroy "$APP_NAME" --yes || true
+
+      # --- Delete Neon branch ---
+      - name: Delete Neon preview branch
+        env:
+          NEON_API_KEY: ${{ secrets.NEON_API_KEY }}
+          NEON_PROJECT_ID: ${{ secrets.NEON_PROJECT_ID }}
+        run: |
+          BRANCH_NAME="preview/pr-${{ github.event.pull_request.number }}"
+
+          # List branches and find the one matching our name
+          BRANCH_ID=$(curl -s \
+            -H "Authorization: Bearer $NEON_API_KEY" \
+            "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches" \
+            | jq -r ".branches[] | select(.name == \"$BRANCH_NAME\") | .id")
+
+          if [ -n "$BRANCH_ID" ]; then
+            curl -s -X DELETE \
+              -H "Authorization: Bearer $NEON_API_KEY" \
+              "https://console.neon.tech/api/v2/projects/$NEON_PROJECT_ID/branches/$BRANCH_ID"
+            echo "Deleted Neon branch: $BRANCH_NAME ($BRANCH_ID)"
+          else
+            echo "Neon branch $BRANCH_NAME not found, skipping"
+          fi
