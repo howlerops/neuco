@@ -23,6 +23,8 @@ jobs:
           project_id: ${{ secrets.NEON_PROJECT_ID }}
           branch_name: preview/pr-${{ github.event.pull_request.number }}
           api_key: ${{ secrets.NEON_API_KEY }}
+          username: neuco_owner
+          database: neuco
 
       # --- Migrations ---
       - name: Install golang-migrate
@@ -31,7 +33,7 @@ jobs:
           sudo mv migrate /usr/local/bin/
 
       - name: Run migrations on preview DB
-        run: migrate -path migrations -database "${{ steps.neon.outputs.db_url_with_pooler }}?sslmode=require" up
+        run: migrate -path migrations -database "${{ steps.neon.outputs.db_url_with_pooler }}" up
 
       # --- Fly.io preview app ---
       - uses: superfly/flyctl-actions/setup-flyctl@master
@@ -49,7 +51,7 @@ jobs:
 
           # Set secrets on the preview app
           flyctl secrets set \
-            DATABASE_URL="${{ steps.neon.outputs.db_url_with_pooler }}?sslmode=require" \
+            DATABASE_URL="${{ steps.neon.outputs.db_url_with_pooler }}" \
             ANTHROPIC_API_KEY="${{ secrets.ANTHROPIC_API_KEY }}" \
             OPENAI_API_KEY="${{ secrets.OPENAI_API_KEY }}" \
             RESEND_API_KEY="${{ secrets.RESEND_API_KEY }}" \
