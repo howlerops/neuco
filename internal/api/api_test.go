@@ -27,6 +27,7 @@ import (
 	mw "github.com/neuco-ai/neuco/internal/api/middleware"
 	"github.com/neuco-ai/neuco/internal/config"
 	"github.com/neuco-ai/neuco/internal/domain"
+	"github.com/neuco-ai/neuco/internal/jobs"
 	"github.com/neuco-ai/neuco/internal/store"
 )
 
@@ -89,6 +90,16 @@ func testSetup(t *testing.T) *testEnv {
 	if err != nil {
 		pool.Close()
 		t.Fatalf("failed to create river client: %v", err)
+	}
+
+	// Smoke-test: verify River can actually insert a job.
+	_, err = riverClient.Insert(ctx, jobs.FetchSignalsJobArgs{
+		ProjectID: uuid.New(),
+		RunID:     uuid.New(),
+		TaskID:    uuid.New(),
+	}, nil)
+	if err != nil {
+		t.Fatalf("river insert smoke test failed: %v", err)
 	}
 
 	deps := api.NewDeps(s, riverClient, cfg, pool)
