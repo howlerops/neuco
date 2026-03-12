@@ -28,6 +28,7 @@ func NewRouter(d *Deps, logger *slog.Logger) http.Handler {
 	r.Route("/api/v1/auth", func(r chi.Router) {
 		r.Post("/github/callback", handlers.GitHubCallback(d))
 		r.Post("/refresh", handlers.RefreshToken(d))
+		r.Post("/logout", handlers.Logout(d))
 
 		// Protected auth routes (require a valid JWT).
 		r.Group(func(r chi.Router) {

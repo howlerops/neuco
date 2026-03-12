@@ -30,6 +30,60 @@ function getAccessToken(): string | null {
 	return localStorage.getItem('access_token');
 }
 
+function getTokenExpiry(): number | null {
+	if (!browser) return null;
+	const val = localStorage.getItem('access_token_expires_at');
+	return val ? Number(val) : null;
+}
+
+function isTokenExpiringSoon(): boolean {
+	const expiresAt = getTokenExpiry();
+	if (!expiresAt) return false;
+	// Refresh if less than 5 minutes remaining
+	return Date.now() > expiresAt - 5 * 60 * 1000;
+}
+
+// ─── Silent Token Refresh ─────────────────────────────────────────────────────
+
+let refreshPromise: Promise<boolean> | null = null;
+
+async function silentRefresh(): Promise<boolean> {
+	// Deduplicate concurrent refresh attempts
+	if (refreshPromise) return refreshPromise;
+
+	refreshPromise = doRefresh();
+	try {
+		return await refreshPromise;
+	} finally {
+		refreshPromise = null;
+	}
+}
+
+async function doRefresh(): Promise<boolean> {
+	try {
+		const baseUrl = getBaseUrl();
+		const response = await fetch(`${baseUrl}/api/v1/auth/refresh`, {
+			method: 'POST',
+			credentials: 'include' // send httpOnly cookie
+		});
+
+		if (!response.ok) return false;
+
+		const data = await response.json();
+		if (data.access_token) {
+			localStorage.setItem('access_token', data.access_token);
+			if (data.expires_in) {
+				const expiresAt = Date.now() + data.expires_in * 1000;
+				localStorage.setItem('access_token_expires_at', String(expiresAt));
+			}
+			return true;
+		}
+		return false;
+	} catch {
+		return false;
+	}
+}
+
 // ─── snake_case → camelCase transformer ───────────────────────────────────────
 // The Go backend sends snake_case JSON keys. The frontend uses camelCase types.
 // This transformer converts all object keys recursively on every API response.
@@ -82,6 +136,11 @@ async function request<T>(
 	body?: unknown,
 	options: RequestOptions = {}
 ): Promise<T> {
+	// Proactively refresh if token is expiring soon
+	if (browser && isTokenExpiringSoon() && getAccessToken()) {
+		await silentRefresh();
+	}
+
 	const baseUrl = getBaseUrl();
 	const url = `${baseUrl}${path}`;
 
@@ -98,6 +157,7 @@ async function request<T>(
 	const init: RequestInit = {
 		method,
 		headers,
+		credentials: 'include', // always send cookies for refresh token
 		signal: options.signal
 	};
 
@@ -113,13 +173,33 @@ async function request<T>(
 		throw new ApiError(0, 'Network error', err);
 	}
 
-	if (response.status === 401) {
-		if (browser) {
-			localStorage.removeItem('access_token');
-			localStorage.removeItem('refresh_token');
-			await goto('/login');
+	// On 401, attempt a silent refresh and retry once
+	if (response.status === 401 && browser) {
+		const refreshed = await silentRefresh();
+		if (refreshed) {
+			// Retry the original request with the new token
+			const newToken = getAccessToken();
+			if (newToken) {
+				headers['Authorization'] = `Bearer ${newToken}`;
+			}
+			const retryInit: RequestInit = { method, headers, credentials: 'include', signal: options.signal };
+			if (body !== undefined) {
+				retryInit.body = JSON.stringify(transformKeysToSnake(body));
+			}
+			try {
+				response = await fetch(url, retryInit);
+			} catch (err) {
+				throw new ApiError(0, 'Network error', err);
+			}
 		}
-		throw new ApiError(401, 'Unauthorized', null);
+
+		// If still 401 after refresh attempt, redirect to login
+		if (response.status === 401) {
+			localStorage.removeItem('access_token');
+			localStorage.removeItem('access_token_expires_at');
+			await goto('/login');
+			throw new ApiError(401, 'Unauthorized', null);
+		}
 	}
 
 	if (!response.ok) {

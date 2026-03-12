@@ -6,10 +6,10 @@
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { apiClient } from '$lib/api/client';
 
-	// After the API client's snake→camel transformer, keys are camelCase
+	// After the API client's snake→camel transformer, keys are camelCase.
+	// Refresh token is now set as an httpOnly cookie by the backend.
 	interface CallbackResponse {
 		accessToken: string;
-		refreshToken: string;
 		expiresIn: number;
 	}
 
@@ -39,7 +39,7 @@
 				code
 			});
 
-			authStore.setTokens(data.accessToken, data.refreshToken);
+			authStore.setTokens(data.accessToken, data.expiresIn);
 
 			// Redirect to root — the app layout will fetch /me and resolve the user + org
 			goto('/');

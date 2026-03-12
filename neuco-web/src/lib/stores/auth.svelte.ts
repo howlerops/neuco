@@ -21,26 +21,26 @@ function writeToStorage(key: string, value: string | null): void {
 
 function createAuthStore() {
 	let accessToken = $state<string | null>(readFromStorage('access_token'));
-	let refreshToken = $state<string | null>(readFromStorage('refresh_token'));
 	let currentUser = $state<User | null>(null);
 	let currentOrg = $state<Organization | null>(null);
 
 	const isAuthenticated = $derived(Boolean(accessToken && accessToken.length > 0));
 
-	function setTokens(access: string, refresh: string): void {
+	function setTokens(access: string, expiresIn?: number): void {
 		accessToken = access;
-		refreshToken = refresh;
 		writeToStorage('access_token', access);
-		writeToStorage('refresh_token', refresh);
+		if (expiresIn) {
+			const expiresAt = Date.now() + expiresIn * 1000;
+			writeToStorage('access_token_expires_at', String(expiresAt));
+		}
 	}
 
 	function clearAuth(): void {
 		accessToken = null;
-		refreshToken = null;
 		currentUser = null;
 		currentOrg = null;
 		writeToStorage('access_token', null);
-		writeToStorage('refresh_token', null);
+		writeToStorage('access_token_expires_at', null);
 		writeToStorage('current_org_id', null);
 	}
 
@@ -64,9 +64,6 @@ function createAuthStore() {
 	return {
 		get accessToken() {
 			return accessToken;
-		},
-		get refreshToken() {
-			return refreshToken;
 		},
 		get currentUser() {
 			return currentUser;

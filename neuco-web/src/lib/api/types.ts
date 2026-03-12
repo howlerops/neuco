@@ -279,8 +279,7 @@ export interface Integration {
 
 export interface AuthResponse {
 	accessToken: string;
-	refreshToken: string;
-	user: User;
+	expiresIn: number;
 }
 
 // ─── Create/Update Payloads ───────────────────────────────────────────────────

@@ -24,16 +24,16 @@ type githubUser struct {
 }
 
 // tokenPair holds the access and refresh JWTs returned to the client.
+// The refresh token is set as an httpOnly cookie, not in the JSON body.
 type tokenPair struct {
-	AccessToken  string `json:"access_token"`
-	RefreshToken string `json:"refresh_token"`
-	ExpiresIn    int    `json:"expires_in"` // seconds
+	AccessToken string `json:"access_token"`
+	ExpiresIn   int    `json:"expires_in"` // seconds
 }
 
-// refreshTokenRequest is the request body for POST /api/v1/auth/refresh.
-type refreshTokenRequest struct {
-	RefreshToken string `json:"refresh_token"`
-}
+const (
+	refreshCookieName   = "neuco_refresh"
+	refreshCookieMaxAge = 30 * 24 * 60 * 60 // 30 days in seconds
+)
 
 // meResponse is the response body for GET /api/v1/auth/me.
 type meResponse struct {
@@ -75,7 +75,42 @@ func fetchGitHubUser(ctx context.Context, accessToken string) (*githubUser, erro
 	return &gu, nil
 }
 
-func issueTokenPair(d *Deps, user domain.User, orgID uuid.UUID, role domain.OrgRole) (*tokenPair, error) {
+// setRefreshCookie writes the refresh token as a Secure, HttpOnly, SameSite=Strict cookie.
+func setRefreshCookie(w http.ResponseWriter, d *Deps, refreshToken string) {
+	secure := d.Config.FrontendURL != "" && d.Config.FrontendURL != "http://localhost:5173"
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    refreshToken,
+		Path:     "/api/v1/auth",
+		MaxAge:   refreshCookieMaxAge,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// clearRefreshCookie removes the refresh cookie.
+func clearRefreshCookie(w http.ResponseWriter, d *Deps) {
+	secure := d.Config.FrontendURL != "" && d.Config.FrontendURL != "http://localhost:5173"
+	http.SetCookie(w, &http.Cookie{
+		Name:     refreshCookieName,
+		Value:    "",
+		Path:     "/api/v1/auth",
+		MaxAge:   -1,
+		HttpOnly: true,
+		Secure:   secure,
+		SameSite: http.SameSiteLaxMode,
+	})
+}
+
+// issuedTokens holds both access and refresh JWTs. The refresh token is sent as
+// an httpOnly cookie, while the access token is in the JSON response.
+type issuedTokens struct {
+	pair         tokenPair
+	refreshToken string
+}
+
+func issueTokenPair(d *Deps, user domain.User, orgID uuid.UUID, role domain.OrgRole) (*issuedTokens, error) {
 	secret := []byte(d.Config.JWTSecret)
 	now := time.Now()
 
@@ -106,10 +141,12 @@ func issueTokenPair(d *Deps, user domain.User, orgID uuid.UUID, role domain.OrgR
 		return nil, err
 	}
 
-	return &tokenPair{
-		AccessToken:  accessToken,
-		RefreshToken: refreshToken,
-		ExpiresIn:    int((24 * time.Hour).Seconds()),
+	return &issuedTokens{
+		pair: tokenPair{
+			AccessToken: accessToken,
+			ExpiresIn:   int((24 * time.Hour).Seconds()),
+		},
+		refreshToken: refreshToken,
 	}, nil
 }
 
@@ -181,13 +218,14 @@ func GitHubCallback(d *Deps) http.HandlerFunc {
 			role = domain.OrgRoleOwner // safe default for the org owner
 		}
 
-		pair, err := issueTokenPair(d, user, primaryOrg.ID, role)
+		tokens, err := issueTokenPair(d, user, primaryOrg.ID, role)
 		if err != nil {
 			respondErr(w, r, http.StatusInternalServerError, "failed to issue tokens")
 			return
 		}
 
-		respondOK(w, r, pair)
+		setRefreshCookie(w, d, tokens.refreshToken)
+		respondOK(w, r, tokens.pair)
 	}
 }
 
@@ -214,19 +252,19 @@ func Me(d *Deps) http.HandlerFunc {
 }
 
 // RefreshToken handles POST /api/v1/auth/refresh.
-// Validates a refresh token and issues a new access token.
+// Reads the refresh token from the httpOnly cookie and issues a new token pair.
 func RefreshToken(d *Deps) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		var req refreshTokenRequest
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.RefreshToken == "" {
-			respondErr(w, r, http.StatusBadRequest, "missing refresh_token")
+		cookie, err := r.Cookie(refreshCookieName)
+		if err != nil || cookie.Value == "" {
+			respondErr(w, r, http.StatusUnauthorized, "missing refresh token")
 			return
 		}
 
 		secret := []byte(d.Config.JWTSecret)
 		claims := &jwt.RegisteredClaims{}
 
-		token, err := jwt.ParseWithClaims(req.RefreshToken, claims, func(t *jwt.Token) (any, error) {
+		token, err := jwt.ParseWithClaims(cookie.Value, claims, func(t *jwt.Token) (any, error) {
 			if _, ok := t.Method.(*jwt.SigningMethodHMAC); !ok {
 				return nil, jwt.ErrSignatureInvalid
 			}
@@ -234,6 +272,7 @@ func RefreshToken(d *Deps) http.HandlerFunc {
 		}, jwt.WithValidMethods([]string{"HS256"}),
 			jwt.WithAudience("refresh"))
 		if err != nil || !token.Valid {
+			clearRefreshCookie(w, d)
 			respondErr(w, r, http.StatusUnauthorized, "invalid or expired refresh token")
 			return
 		}
@@ -262,12 +301,22 @@ func RefreshToken(d *Deps) http.HandlerFunc {
 			role = domain.OrgRoleMember
 		}
 
-		pair, err := issueTokenPair(d, user, org.ID, role)
+		tokens, err := issueTokenPair(d, user, org.ID, role)
 		if err != nil {
 			respondErr(w, r, http.StatusInternalServerError, "failed to issue tokens")
 			return
 		}
 
-		respondOK(w, r, pair)
+		setRefreshCookie(w, d, tokens.refreshToken)
+		respondOK(w, r, tokens.pair)
+	}
+}
+
+// Logout handles POST /api/v1/auth/logout.
+// Clears the refresh token cookie.
+func Logout(d *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		clearRefreshCookie(w, d)
+		respondNoContent(w, r)
 	}
 }
