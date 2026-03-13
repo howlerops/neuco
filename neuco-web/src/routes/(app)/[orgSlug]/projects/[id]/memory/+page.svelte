@@ -132,7 +132,6 @@
 	<!-- Filters -->
 	<div class="flex items-center gap-3">
 		<Select
-			type="single"
 			value={filterCategory || undefined}
 			onValueChange={(v) => {
 				filterCategory = (v as ContextCategory) ?? '';
@@ -202,7 +201,7 @@
 										cfg.color
 									)}
 								>
-									<svelte:component this={cfg.icon} class="h-3 w-3" />
+									{#if cfg.icon}<cfg.icon class="h-3 w-3" />{/if}
 									{cfg.label}
 								</span>
 								<span class="text-xs text-muted-foreground">
@@ -276,7 +275,6 @@
 			<div>
 				<label for="ctx-category" class="text-sm font-medium block mb-1.5">Category</label>
 				<Select
-					type="single"
 					value={newCategory}
 					onValueChange={(v) => {
 						if (v) newCategory = v as ContextCategory;

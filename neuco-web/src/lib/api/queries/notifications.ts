@@ -23,53 +23,59 @@ export const notificationKeys = {
 
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
-export function useNotifications(orgId: string, limit = 20) {
-	return createQuery<Notification[]>(() => ({
-		queryKey: notificationKeys.list(orgId),
-		queryFn: async () => {
-			const raw = await apiClient.get<NotificationsBackendResponse>(
-				`/api/v1/orgs/${orgId}/notifications?limit=${limit}`
-			);
-			return raw.notifications ?? [];
-		},
-		enabled: !!orgId,
-		staleTime: 15 * 1000,
-		refetchInterval: 60 * 1000
-	}));
+export function useNotifications(getOrgId: () => string, limit = 20) {
+	return createQuery<Notification[]>(() => {
+		const orgId = getOrgId();
+		return {
+			queryKey: notificationKeys.list(orgId),
+			queryFn: async () => {
+				const raw = await apiClient.get<NotificationsBackendResponse>(
+					`/api/v1/orgs/${orgId}/notifications?limit=${limit}`
+				);
+				return raw.notifications ?? [];
+			},
+			enabled: !!orgId,
+			staleTime: 15 * 1000,
+			refetchInterval: 60 * 1000
+		};
+	});
 }
 
-export function useUnreadCount(orgId: string) {
-	return createQuery<number>(() => ({
-		queryKey: notificationKeys.unreadCount(orgId),
-		queryFn: async () => {
-			const raw = await apiClient.get<UnreadCountResponse>(
-				`/api/v1/orgs/${orgId}/notifications/unread-count`
-			);
-			return raw.count ?? 0;
-		},
-		enabled: !!orgId,
-		staleTime: 15 * 1000,
-		refetchInterval: 30 * 1000
-	}));
+export function useUnreadCount(getOrgId: () => string) {
+	return createQuery<number>(() => {
+		const orgId = getOrgId();
+		return {
+			queryKey: notificationKeys.unreadCount(orgId),
+			queryFn: async () => {
+				const raw = await apiClient.get<UnreadCountResponse>(
+					`/api/v1/orgs/${orgId}/notifications/unread-count`
+				);
+				return raw.count ?? 0;
+			},
+			enabled: !!orgId,
+			staleTime: 15 * 1000,
+			refetchInterval: 30 * 1000
+		};
+	});
 }
 
-export function useMarkNotificationRead(orgId: string) {
+export function useMarkNotificationRead(getOrgId: () => string) {
 	const queryClient = useQueryClient();
 	return createMutation<void, Error, string>(() => ({
 		mutationFn: (notificationId: string) =>
-			apiClient.patch<void>(`/api/v1/orgs/${orgId}/notifications/${notificationId}/read`),
+			apiClient.patch<void>(`/api/v1/orgs/${getOrgId()}/notifications/${notificationId}/read`),
 		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: notificationKeys.all(orgId) });
+			queryClient.invalidateQueries({ queryKey: notificationKeys.all(getOrgId()) });
 		}
 	}));
 }
 
-export function useMarkAllRead(orgId: string) {
+export function useMarkAllRead(getOrgId: () => string) {
 	const queryClient = useQueryClient();
 	return createMutation<void, Error, void>(() => ({
-		mutationFn: () => apiClient.post<void>(`/api/v1/orgs/${orgId}/notifications/read-all`),
+		mutationFn: () => apiClient.post<void>(`/api/v1/orgs/${getOrgId()}/notifications/read-all`),
 		onSuccess: () => {
-			queryClient.invalidateQueries({ queryKey: notificationKeys.all(orgId) });
+			queryClient.invalidateQueries({ queryKey: notificationKeys.all(getOrgId()) });
 		}
 	}));
 }

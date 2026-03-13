@@ -61,11 +61,11 @@
 	const orgSlug = $derived($page.params.orgSlug ?? '');
 
 	// Notifications
-	const currentOrgId = $derived(authStore.currentOrg?.id ?? '');
-	const unreadCountQuery = useUnreadCount(currentOrgId);
-	const notificationsQuery = useNotifications(currentOrgId);
-	const markReadMutation = useMarkNotificationRead(currentOrgId);
-	const markAllReadMutation = useMarkAllRead(currentOrgId);
+	const getOrgId = () => authStore.currentOrg?.id ?? '';
+	const unreadCountQuery = useUnreadCount(getOrgId);
+	const notificationsQuery = useNotifications(getOrgId);
+	const markReadMutation = useMarkNotificationRead(getOrgId);
+	const markAllReadMutation = useMarkAllRead(getOrgId);
 	const unreadCount = $derived(unreadCountQuery.data ?? 0);
 
 	// Nav items — org-level pages in sidebar, project-level pages in project layout tabs
