@@ -443,7 +443,9 @@ func TestHealthEndpoint(t *testing.T) {
 	assertStatus(t, resp, http.StatusOK)
 
 	var result map[string]any
-	json.Unmarshal(readBody(t, resp), &result)
+	if err := json.Unmarshal(readBody(t, resp), &result); err != nil {
+		t.Fatalf("unmarshal health response: %v", err)
+	}
 	if result["status"] != "ok" {
 		t.Errorf("expected health status ok, got %v", result["status"])
 	}
@@ -485,9 +487,9 @@ func TestAuthFlow(t *testing.T) {
 		assertStatus(t, resp, http.StatusUnauthorized)
 	})
 
-	t.Run("refresh_without_body_returns_400", func(t *testing.T) {
+	t.Run("refresh_without_cookie_returns_401", func(t *testing.T) {
 		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/auth/refresh", map[string]string{}, "")
-		assertStatus(t, resp, http.StatusBadRequest)
+		assertStatus(t, resp, http.StatusUnauthorized)
 	})
 }
 
@@ -502,7 +504,9 @@ func TestOrgCRUD(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var orgs []domain.Organization
-		json.Unmarshal(readBody(t, resp), &orgs)
+		if err := json.Unmarshal(readBody(t, resp), &orgs); err != nil {
+			t.Fatalf("unmarshal orgs: %v", err)
+		}
 		if len(orgs) == 0 {
 			t.Error("expected at least one org")
 		}
@@ -517,7 +521,9 @@ func TestOrgCRUD(t *testing.T) {
 		assertStatus(t, resp, http.StatusCreated)
 
 		var org domain.Organization
-		json.Unmarshal(readBody(t, resp), &org)
+		if err := json.Unmarshal(readBody(t, resp), &org); err != nil {
+			t.Fatalf("unmarshal org: %v", err)
+		}
 		if org.Name != payload["name"] {
 			t.Errorf("expected org name %q, got %q", payload["name"], org.Name)
 		}
@@ -541,7 +547,9 @@ func TestOrgCRUD(t *testing.T) {
 		assertStatus(t, resp, http.StatusOK)
 
 		var org domain.Organization
-		json.Unmarshal(readBody(t, resp), &org)
+		if err := json.Unmarshal(readBody(t, resp), &org); err != nil {
+			t.Fatalf("unmarshal org: %v", err)
+		}
 		if org.Name != "Updated Alpha Org" {
 			t.Errorf("expected updated name, got %q", org.Name)
 		}
@@ -1800,7 +1808,7 @@ func TestWebhookFullFlow(t *testing.T) {
 		webhookPayload := map[string]any{
 			"content": "Enterprise customer needs SSO integration",
 			"type":    "feature_request",
-			"source":  "sales_call",
+			"source":  "webhook",
 			"meta":    map[string]any{"customer": "BigCorp", "deal_size": "$50k"},
 		}
 		webhookURL := fmt.Sprintf("%s/api/v1/webhooks/%s/%s", env.server.URL, project.ID, created.WebhookSecret)

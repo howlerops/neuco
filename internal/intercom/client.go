@@ -260,7 +260,7 @@ func ConversationToSignal(conv Conversation, projectID uuid.UUID) domain.Signal 
 					content.WriteString("\n\n---\n\n")
 				}
 				if part.Author.Name != "" {
-					content.WriteString(fmt.Sprintf("[%s]: ", part.Author.Name))
+					fmt.Fprintf(&content, "[%s]: ", part.Author.Name)
 				}
 				content.WriteString(part.Body)
 			}
@@ -270,7 +270,7 @@ func ConversationToSignal(conv Conversation, projectID uuid.UUID) domain.Signal 
 		if conv.Title != "" {
 			content.WriteString(conv.Title)
 		} else {
-			content.WriteString(fmt.Sprintf("Intercom conversation %s", conv.ID))
+			fmt.Fprintf(&content, "Intercom conversation %s", conv.ID)
 		}
 	}
 

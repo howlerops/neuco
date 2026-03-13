@@ -82,7 +82,7 @@ func (c *Client) ExchangeCode(ctx context.Context, code, redirectURI string) (*T
 	if err != nil {
 		return nil, fmt.Errorf("linear.ExchangeCode: request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if resp.StatusCode != http.StatusOK {
@@ -244,7 +244,7 @@ func (c *Client) graphQL(ctx context.Context, accessToken, query string, variabl
 	if err != nil {
 		return nil, fmt.Errorf("request: %w", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<20))
 	if resp.StatusCode != http.StatusOK {
