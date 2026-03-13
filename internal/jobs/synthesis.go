@@ -352,6 +352,16 @@ func (w *NameThemesWorker) Work(ctx context.Context, job *river.Job[NameThemesJo
 
 	slog.Info("naming themes", "project_id", job.Args.ProjectID, "clusters", len(job.Args.ClusterIDs))
 
+	// Fetch prior project context to enrich theme naming.
+	var priorContextHint string
+	priorContexts, err := w.store.ListProjectContextsInternal(ctx, job.Args.ProjectID, 10)
+	if err == nil && len(priorContexts) > 0 {
+		priorContextHint = "\n\nPrior project context (use this to provide more informed naming):\n"
+		for _, pc := range priorContexts {
+			priorContextHint += fmt.Sprintf("- [%s] %s\n", pc.Category, pc.Title)
+		}
+	}
+
 	for _, candidateID := range job.Args.ClusterIDs {
 		candidate, err := w.store.GetCandidateInternal(ctx, candidateID)
 		if err != nil {
@@ -376,7 +386,21 @@ func (w *NameThemesWorker) Work(ctx context.Context, job *river.Job[NameThemesJo
 		}
 
 		// Call LLM to name the theme
-		title, summary, err := nameThemeViaLLM(ctx, w.cfg.AnthropicAPIKey, signalTexts)
+		llmStart := time.Now()
+		title, summary, llmResp, err := nameThemeViaLLM(ctx, w.cfg.AnthropicAPIKey, signalTexts+priorContextHint)
+		llmLatency := trackDuration(llmStart)
+		if llmResp != nil {
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+			}
+			recordLLMCall(ctx, w.store, job.Args.ProjectID,
+				ptrUUID(job.Args.RunID), ptrUUID(job.Args.TaskID),
+				domain.LLMProviderAnthropic, "claude-haiku-4-5-20251001",
+				domain.LLMCallTypeThemeNaming,
+				llmResp.Usage.InputTokens, llmResp.Usage.OutputTokens, llmLatency,
+				errMsg)
+		}
 		if err != nil {
 			slog.Error("failed to name theme", "id", candidateID, "error", err)
 			continue
@@ -418,9 +442,9 @@ func (w *NameThemesWorker) Work(ctx context.Context, job *river.Job[NameThemesJo
 	return nil
 }
 
-func nameThemeViaLLM(ctx context.Context, apiKey string, signalTexts string) (string, string, error) {
+func nameThemeViaLLM(ctx context.Context, apiKey string, signalTexts string) (string, string, *anthropicResponse, error) {
 	if apiKey == "" {
-		return "Unnamed Theme", "No API key configured for theme naming.", nil
+		return "Unnamed Theme", "No API key configured for theme naming.", nil, nil
 	}
 
 	prompt := fmt.Sprintf(`You are analyzing customer signals for a product team. Given the following customer feedback signals, provide:
@@ -442,12 +466,12 @@ Signals:
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	req, err := newHTTPRequest(ctx, "POST", "https://api.anthropic.com/v1/messages", body)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -455,21 +479,17 @@ Signals:
 
 	resp, err := doHTTPRequest(req)
 	if err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var result anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", "", err
+		return "", "", nil, err
 	}
 
 	if len(result.Content) == 0 {
-		return "Unnamed Theme", "", nil
+		return "Unnamed Theme", "", &result, nil
 	}
 
 	var parsed struct {
@@ -477,10 +497,10 @@ Signals:
 		Summary string `json:"summary"`
 	}
 	if err := json.Unmarshal([]byte(result.Content[0].Text), &parsed); err != nil {
-		return result.Content[0].Text, "", nil
+		return result.Content[0].Text, "", &result, nil
 	}
 
-	return parsed.Title, parsed.Summary, nil
+	return parsed.Title, parsed.Summary, &result, nil
 }
 
 // ScoreCandidatesWorker scores feature candidates by frequency, recency, and weight.
@@ -591,18 +611,28 @@ func (w *WriteCandidatesWorker) Work(ctx context.Context, job *river.Job[WriteCa
 	// and to trigger the copilot review.
 
 	CompleteTask(ctx, w.store, job.Args.TaskID, start)
-	CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
 
-	// Trigger copilot synthesis review
+	// Chain: update_context (accumulates project memory from synthesis results)
 	client := getRiverClient()
 	if client != nil {
-		_, err := client.Insert(ctx, CopilotReviewJobArgs{
-			ProjectID:  job.Args.ProjectID,
-			TargetType: "synthesis",
-			TargetID:   job.Args.RunID,
-		}, &river.InsertOpts{Queue: "default"})
+		run, _ := w.store.GetPipelineRun(ctx, job.Args.RunID)
+		var contextTaskID uuid.UUID
+		if run != nil {
+			for _, t := range run.Tasks {
+				if t.Name == "update_context" {
+					contextTaskID = t.ID
+					break
+				}
+			}
+		}
+
+		_, err := client.Insert(ctx, UpdateContextJobArgs{
+			ProjectID: job.Args.ProjectID,
+			RunID:     job.Args.RunID,
+			TaskID:    contextTaskID,
+		}, &river.InsertOpts{Queue: "synthesis"})
 		if err != nil {
-			slog.Error("failed to enqueue copilot review", "error", err)
+			slog.Error("failed to chain update_context job", "error", err)
 		}
 	}
 

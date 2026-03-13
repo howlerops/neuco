@@ -3,6 +3,7 @@ package jobs
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -182,6 +183,15 @@ func (w *IngestWorker) processShortForm(
 
 	inserted, err := w.store.InsertSignal(ctx, sig)
 	if err != nil {
+		if errors.Is(err, store.ErrDuplicateSignal) {
+			slog.Info("ingest: exact duplicate detected, skipping",
+				"project_id", job.Args.ProjectID,
+				"source_ref", rawSignal.SourceRef,
+			)
+			CompleteTask(ctx, w.store, job.Args.TaskID, start)
+			CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
+			return nil
+		}
 		FailTask(ctx, w.store, job.Args.TaskID, err)
 		CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
 		return err
@@ -271,7 +281,21 @@ func (w *EmbedWorker) Work(ctx context.Context, job *river.Job[EmbedJobArgs]) er
 		}
 
 		// Generate embedding via OpenAI API
-		embedding, err := generateEmbedding(ctx, w.cfg.OpenAIAPIKey, sig.Content)
+		embedStart := time.Now()
+		embedding, embedTokens, err := generateEmbedding(ctx, w.cfg.OpenAIAPIKey, sig.Content)
+		embedLatency := trackDuration(embedStart)
+		{
+			errMsg := ""
+			if err != nil {
+				errMsg = err.Error()
+			}
+			recordLLMCall(ctx, w.store, job.Args.ProjectID,
+				ptrUUID(job.Args.RunID), ptrUUID(job.Args.TaskID),
+				domain.LLMProviderOpenAI, "text-embedding-3-small",
+				domain.LLMCallTypeEmbedding,
+				embedTokens, 0, embedLatency,
+				errMsg)
+		}
 		if err != nil {
 			slog.Error("failed to generate embedding", "signal_id", sigID, "error", err)
 			continue
@@ -281,6 +305,20 @@ func (w *EmbedWorker) Work(ctx context.Context, job *river.Job[EmbedJobArgs]) er
 			slog.Error("failed to store embedding", "signal_id", sigID, "error", err)
 			continue
 		}
+
+		// Near-duplicate check: if cosine similarity >= 0.95 with an existing
+		// signal, mark this one as a duplicate.
+		if originalID, err := w.store.FindNearDuplicateSignal(ctx, job.Args.ProjectID, sigID, embedding, 0.95); err == nil && originalID != nil {
+			if markErr := w.store.MarkAsDuplicate(ctx, sigID, *originalID); markErr != nil {
+				slog.Error("failed to mark near-duplicate", "signal_id", sigID, "original_id", *originalID, "error", markErr)
+			} else {
+				slog.Info("embed: near-duplicate detected",
+					"signal_id", sigID,
+					"original_id", *originalID,
+					"project_id", job.Args.ProjectID,
+				)
+			}
+		}
 	}
 
 	CompleteTask(ctx, w.store, job.Args.TaskID, start)
@@ -289,12 +327,13 @@ func (w *EmbedWorker) Work(ctx context.Context, job *river.Job[EmbedJobArgs]) er
 }
 
 // generateEmbedding calls the OpenAI embeddings API.
-func generateEmbedding(ctx context.Context, apiKey string, text string) ([]float32, error) {
+// generateEmbedding calls the OpenAI embeddings API. Returns the embedding
+// vector, the number of prompt tokens used, and any error.
+func generateEmbedding(ctx context.Context, apiKey string, text string) ([]float32, int, error) {
 	if apiKey == "" {
-		// Return zero vector in dev mode when no API key is configured
 		slog.Warn("no OpenAI API key configured, returning zero embedding")
 		embedding := make([]float32, 1536)
-		return embedding, nil
+		return embedding, 0, nil
 	}
 
 	payload := map[string]interface{}{
@@ -303,19 +342,19 @@ func generateEmbedding(ctx context.Context, apiKey string, text string) ([]float
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 
 	req, err := newHTTPRequest(ctx, "POST", "https://api.openai.com/v1/embeddings", body)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := doHTTPRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 
@@ -323,13 +362,17 @@ func generateEmbedding(ctx context.Context, apiKey string, text string) ([]float
 		Data []struct {
 			Embedding []float32 `json:"embedding"`
 		} `json:"data"`
+		Usage struct {
+			PromptTokens int `json:"prompt_tokens"`
+			TotalTokens  int `json:"total_tokens"`
+		} `json:"usage"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(result.Data) == 0 {
-		return nil, nil
+		return nil, result.Usage.PromptTokens, nil
 	}
 
-	return result.Data[0].Embedding, nil
+	return result.Data[0].Embedding, result.Usage.PromptTokens, nil
 }

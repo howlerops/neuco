@@ -60,7 +60,21 @@ func (w *SpecGenWorker) Work(ctx context.Context, job *river.Job[SpecGenJobArgs]
 	}
 
 	// Generate spec via Anthropic API
-	spec, err := generateSpecViaLLM(ctx, w.cfg.AnthropicAPIKey, candidate.Title, candidate.ProblemSummary, signalContext)
+	llmStart := time.Now()
+	spec, llmResp, err := generateSpecViaLLM(ctx, w.cfg.AnthropicAPIKey, candidate.Title, candidate.ProblemSummary, signalContext)
+	llmLatency := trackDuration(llmStart)
+	if llmResp != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		recordLLMCall(ctx, w.store, job.Args.ProjectID,
+			ptrUUID(job.Args.RunID), ptrUUID(job.Args.TaskID),
+			domain.LLMProviderAnthropic, "claude-sonnet-4-6-20250514",
+			domain.LLMCallTypeSpecGen,
+			llmResp.Usage.InputTokens, llmResp.Usage.OutputTokens, llmLatency,
+			errMsg)
+	}
 	if err != nil {
 		FailTask(ctx, w.store, job.Args.TaskID, err)
 		CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
@@ -102,7 +116,7 @@ func (w *SpecGenWorker) Work(ctx context.Context, job *river.Job[SpecGenJobArgs]
 	return nil
 }
 
-func generateSpecViaLLM(ctx context.Context, apiKey string, title, problemSummary, signalContext string) (*domain.Spec, error) {
+func generateSpecViaLLM(ctx context.Context, apiKey string, title, problemSummary, signalContext string) (*domain.Spec, *anthropicResponse, error) {
 	if apiKey == "" {
 		return &domain.Spec{
 			ID:               uuid.New(),
@@ -112,7 +126,7 @@ func generateSpecViaLLM(ctx context.Context, apiKey string, title, problemSummar
 			AcceptanceCriteria: []string{"Feature works as described"},
 			OutOfScope:       []string{"Not defined yet"},
 			Version:          1,
-		}, nil
+		}, nil, nil
 	}
 
 	prompt := fmt.Sprintf(`You are a senior product manager generating a structured product spec.
@@ -147,12 +161,12 @@ Be specific, grounded in the actual customer signals, and pragmatic. Include 3-5
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	req, err := newHTTPRequest(ctx, "POST", "https://api.anthropic.com/v1/messages", body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -160,21 +174,17 @@ Be specific, grounded in the actual customer signals, and pragmatic. Include 3-5
 
 	resp, err := doHTTPRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var result anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("empty response from LLM")
+		return nil, &result, fmt.Errorf("empty response from LLM")
 	}
 
 	// Parse the JSON response
@@ -204,7 +214,7 @@ Be specific, grounded in the actual customer signals, and pragmatic. Include 3-5
 			ID:               uuid.New(),
 			ProblemStatement: result.Content[0].Text,
 			Version:          1,
-		}, nil
+		}, &result, nil
 	}
 
 	return &domain.Spec{
@@ -218,7 +228,7 @@ Be specific, grounded in the actual customer signals, and pragmatic. Include 3-5
 		DataModelChanges:   specData.DataModelChanges,
 		OpenQuestions:       specData.OpenQuestions,
 		Version:            1,
-	}, nil
+	}, &result, nil
 }
 
 func findJSONStart(s string) int {

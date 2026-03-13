@@ -43,7 +43,7 @@ func (w *CopilotReviewWorker) Work(ctx context.Context, job *river.Job[CopilotRe
 	switch job.Args.TargetType {
 	case "spec":
 		var err error
-		notes, err = w.reviewSpec(ctx, job.Args.ProjectID, job.Args.TargetID)
+		notes, err = w.reviewSpec(ctx, job.Args.ProjectID, job.Args.TargetID, job.Args.RunID, job.Args.TaskID)
 		if err != nil {
 			slog.Error("copilot spec review failed", "error", err)
 			if job.Args.TaskID != uuid.Nil {
@@ -54,7 +54,7 @@ func (w *CopilotReviewWorker) Work(ctx context.Context, job *river.Job[CopilotRe
 
 	case "generation":
 		var err error
-		notes, err = w.reviewGeneration(ctx, job.Args.ProjectID, job.Args.TargetID)
+		notes, err = w.reviewGeneration(ctx, job.Args.ProjectID, job.Args.TargetID, job.Args.RunID, job.Args.TaskID)
 		if err != nil {
 			slog.Error("copilot generation review failed", "error", err)
 			if job.Args.TaskID != uuid.Nil {
@@ -65,7 +65,7 @@ func (w *CopilotReviewWorker) Work(ctx context.Context, job *river.Job[CopilotRe
 
 	case "synthesis":
 		var err error
-		notes, err = w.reviewSynthesis(ctx, job.Args.ProjectID, job.Args.TargetID)
+		notes, err = w.reviewSynthesis(ctx, job.Args.ProjectID, job.Args.TargetID, job.Args.RunID, job.Args.TaskID)
 		if err != nil {
 			slog.Error("copilot synthesis review failed", "error", err)
 			if job.Args.TaskID != uuid.Nil {
@@ -93,7 +93,7 @@ func (w *CopilotReviewWorker) Work(ctx context.Context, job *river.Job[CopilotRe
 	return nil
 }
 
-func (w *CopilotReviewWorker) reviewSpec(ctx context.Context, projectID, specID uuid.UUID) ([]domain.CopilotNote, error) {
+func (w *CopilotReviewWorker) reviewSpec(ctx context.Context, projectID, specID, pipelineRunID, pipelineTaskID uuid.UUID) ([]domain.CopilotNote, error) {
 	spec, err := w.store.GetSpecInternal(ctx, specID)
 	if err != nil {
 		return nil, err
@@ -143,7 +143,21 @@ Types:
 
 Provide 3-5 notes. Be specific and actionable, not generic.`, spec.ProblemStatement, spec.ProposedSolution, string(userStoriesJSON), string(acJSON), string(oosJSON), spec.UIChanges, spec.DataModelChanges, string(oqJSON))
 
-	notes, err := callCopilotLLM(ctx, w.cfg.AnthropicAPIKey, prompt)
+	llmStart := time.Now()
+	notes, llmResp, err := callCopilotLLM(ctx, w.cfg.AnthropicAPIKey, prompt)
+	llmLatency := trackDuration(llmStart)
+	if llmResp != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		recordLLMCall(ctx, w.store, projectID,
+			ptrUUID(pipelineRunID), ptrUUID(pipelineTaskID),
+			domain.LLMProviderAnthropic, "claude-haiku-4-5-20251001",
+			domain.LLMCallTypeCopilotReview,
+			llmResp.Usage.InputTokens, llmResp.Usage.OutputTokens, llmLatency,
+			errMsg)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -163,7 +177,7 @@ Provide 3-5 notes. Be specific and actionable, not generic.`, spec.ProblemStatem
 	return result, nil
 }
 
-func (w *CopilotReviewWorker) reviewGeneration(ctx context.Context, projectID, generationID uuid.UUID) ([]domain.CopilotNote, error) {
+func (w *CopilotReviewWorker) reviewGeneration(ctx context.Context, projectID, generationID, pipelineRunID, pipelineTaskID uuid.UUID) ([]domain.CopilotNote, error) {
 	gen, err := w.store.GetGeneration(ctx, generationID)
 	if err != nil {
 		return nil, err
@@ -199,7 +213,21 @@ Focus on:
 
 Provide 3-5 notes. Be specific — reference exact components or patterns.`, fileContext)
 
-	notes, err := callCopilotLLM(ctx, w.cfg.AnthropicAPIKey, prompt)
+	llmStart := time.Now()
+	notes, llmResp, err := callCopilotLLM(ctx, w.cfg.AnthropicAPIKey, prompt)
+	llmLatency := trackDuration(llmStart)
+	if llmResp != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		recordLLMCall(ctx, w.store, projectID,
+			ptrUUID(pipelineRunID), ptrUUID(pipelineTaskID),
+			domain.LLMProviderAnthropic, "claude-haiku-4-5-20251001",
+			domain.LLMCallTypeCopilotReview,
+			llmResp.Usage.InputTokens, llmResp.Usage.OutputTokens, llmLatency,
+			errMsg)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +247,7 @@ Provide 3-5 notes. Be specific — reference exact components or patterns.`, fil
 	return result, nil
 }
 
-func (w *CopilotReviewWorker) reviewSynthesis(ctx context.Context, projectID, runID uuid.UUID) ([]domain.CopilotNote, error) {
+func (w *CopilotReviewWorker) reviewSynthesis(ctx context.Context, projectID, runID, pipelineRunID, pipelineTaskID uuid.UUID) ([]domain.CopilotNote, error) {
 	candidates, _, err := w.store.ListProjectCandidates(ctx, projectID, store.PageParams{Limit: 10, Offset: 0})
 	if err != nil {
 		return nil, err
@@ -253,7 +281,21 @@ Focus on:
 
 Provide 2-4 notes. Be strategic, not tactical.`, candidateContext)
 
-	notes, err := callCopilotLLM(ctx, w.cfg.AnthropicAPIKey, prompt)
+	llmStart := time.Now()
+	notes, llmResp, err := callCopilotLLM(ctx, w.cfg.AnthropicAPIKey, prompt)
+	llmLatency := trackDuration(llmStart)
+	if llmResp != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		recordLLMCall(ctx, w.store, projectID,
+			ptrUUID(pipelineRunID), ptrUUID(pipelineTaskID),
+			domain.LLMProviderAnthropic, "claude-haiku-4-5-20251001",
+			domain.LLMCallTypeCopilotReview,
+			llmResp.Usage.InputTokens, llmResp.Usage.OutputTokens, llmLatency,
+			errMsg)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -278,7 +320,7 @@ type copilotLLMNote struct {
 	Content string `json:"content"`
 }
 
-func callCopilotLLM(ctx context.Context, apiKey, prompt string) ([]copilotLLMNote, error) {
+func callCopilotLLM(ctx context.Context, apiKey, prompt string) ([]copilotLLMNote, *anthropicResponse, error) {
 	payload := map[string]interface{}{
 		"model":      "claude-haiku-4-5-20251001",
 		"max_tokens": 1024,
@@ -289,12 +331,12 @@ func callCopilotLLM(ctx context.Context, apiKey, prompt string) ([]copilotLLMNot
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	req, err := newHTTPRequest(ctx, "POST", "https://api.anthropic.com/v1/messages", body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -302,21 +344,17 @@ func callCopilotLLM(ctx context.Context, apiKey, prompt string) ([]copilotLLMNot
 
 	resp, err := doHTTPRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var result anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("empty copilot response")
+		return nil, &result, fmt.Errorf("empty copilot response")
 	}
 
 	text := result.Content[0].Text
@@ -331,8 +369,8 @@ func callCopilotLLM(ctx context.Context, apiKey, prompt string) ([]copilotLLMNot
 	if err := json.Unmarshal([]byte(text), &notes); err != nil {
 		return []copilotLLMNote{
 			{Type: "insight", Content: result.Content[0].Text},
-		}, nil
+		}, &result, nil
 	}
 
-	return notes, nil
+	return notes, &result, nil
 }

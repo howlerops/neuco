@@ -2,6 +2,7 @@ package jobs
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -77,10 +78,40 @@ func CheckPipelineCompletion(ctx context.Context, s *store.Store, runID uuid.UUI
 		if err := s.UpdatePipelineRunError(ctx, runID, "one or more tasks failed"); err != nil {
 			slog.Error("failed to update pipeline run error", "run_id", runID, "error", err)
 		}
+		emitPipelineNotification(ctx, s, run, domain.NotificationTypePipelineFailed)
 	} else if allCompleted {
 		if _, err := s.UpdatePipelineRunStatus(ctx, runID, domain.PipelineRunStatusCompleted); err != nil {
 			slog.Error("failed to update pipeline run status", "run_id", runID, "error", err)
 		}
+		emitPipelineNotification(ctx, s, run, domain.NotificationTypePipelineCompleted)
+	}
+}
+
+// emitPipelineNotification creates an org-wide notification for a pipeline
+// completion or failure. Errors are logged but never propagated.
+func emitPipelineNotification(ctx context.Context, s *store.Store, run *domain.PipelineRun, ntype domain.NotificationType) {
+	project, err := s.GetProjectInternal(ctx, run.ProjectID)
+	if err != nil {
+		slog.Error("notification: failed to look up project", "project_id", run.ProjectID, "error", err)
+		return
+	}
+
+	title := fmt.Sprintf("Pipeline %s", string(run.Type))
+	body := fmt.Sprintf("%s pipeline completed successfully for project %s", run.Type, project.Name)
+	if ntype == domain.NotificationTypePipelineFailed {
+		title = fmt.Sprintf("Pipeline %s failed", string(run.Type))
+		body = fmt.Sprintf("%s pipeline failed for project %s", run.Type, project.Name)
+	}
+
+	n := domain.Notification{
+		OrgID: project.OrgID,
+		Type:  ntype,
+		Title: title,
+		Body:  body,
+		Link:  fmt.Sprintf("/projects/%s/pipelines/%s", run.ProjectID, run.ID),
+	}
+	if err := s.CreateNotificationInternal(ctx, n); err != nil {
+		slog.Error("notification: failed to create", "error", err)
 	}
 }
 
@@ -91,7 +122,7 @@ func CreateSynthesisPipeline(ctx context.Context, s *store.Store, projectID uuid
 		return uuid.Nil, nil, err
 	}
 
-	taskNames := []string{"fetch_signals", "embed_missing", "cluster_themes", "name_themes", "score_candidates", "write_candidates"}
+	taskNames := []string{"fetch_signals", "embed_missing", "cluster_themes", "name_themes", "score_candidates", "write_candidates", "update_context"}
 	taskIDs := make([]uuid.UUID, len(taskNames))
 	for i, name := range taskNames {
 		task, err := s.CreatePipelineTask(ctx, run.ID, name, i)
@@ -175,6 +206,86 @@ func CreateNangoSyncPipeline(ctx context.Context, s *store.Store, projectID uuid
 	}
 
 	taskNames := []string{"nango_sync", "embed"}
+	taskIDs := make([]uuid.UUID, len(taskNames))
+	for i, name := range taskNames {
+		task, err := s.CreatePipelineTask(ctx, run.ID, name, i)
+		if err != nil {
+			return uuid.Nil, nil, err
+		}
+		taskIDs[i] = task.ID
+	}
+
+	return run.ID, taskIDs, nil
+}
+
+// CreateIntercomSyncPipeline creates a pipeline run for a native Intercom sync.
+func CreateIntercomSyncPipeline(ctx context.Context, s *store.Store, projectID uuid.UUID) (uuid.UUID, []uuid.UUID, error) {
+	run, err := s.CreatePipelineRun(ctx, projectID, domain.PipelineTypeIntercomSync, nil)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	taskNames := []string{"intercom_sync", "embed"}
+	taskIDs := make([]uuid.UUID, len(taskNames))
+	for i, name := range taskNames {
+		task, err := s.CreatePipelineTask(ctx, run.ID, name, i)
+		if err != nil {
+			return uuid.Nil, nil, err
+		}
+		taskIDs[i] = task.ID
+	}
+
+	return run.ID, taskIDs, nil
+}
+
+// CreateLinearSyncPipeline creates a pipeline run for a native Linear sync.
+func CreateLinearSyncPipeline(ctx context.Context, s *store.Store, projectID uuid.UUID) (uuid.UUID, []uuid.UUID, error) {
+	run, err := s.CreatePipelineRun(ctx, projectID, domain.PipelineTypeLinearSync, nil)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	taskNames := []string{"linear_sync", "embed"}
+	taskIDs := make([]uuid.UUID, len(taskNames))
+	for i, name := range taskNames {
+		task, err := s.CreatePipelineTask(ctx, run.ID, name, i)
+		if err != nil {
+			return uuid.Nil, nil, err
+		}
+		taskIDs[i] = task.ID
+	}
+
+	return run.ID, taskIDs, nil
+}
+
+// CreateJiraSyncPipeline creates a pipeline run for a native Jira sync.
+func CreateJiraSyncPipeline(ctx context.Context, s *store.Store, projectID uuid.UUID) (uuid.UUID, []uuid.UUID, error) {
+	run, err := s.CreatePipelineRun(ctx, projectID, domain.PipelineTypeJiraSync, nil)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	taskNames := []string{"jira_sync", "embed"}
+	taskIDs := make([]uuid.UUID, len(taskNames))
+	for i, name := range taskNames {
+		task, err := s.CreatePipelineTask(ctx, run.ID, name, i)
+		if err != nil {
+			return uuid.Nil, nil, err
+		}
+		taskIDs[i] = task.ID
+	}
+
+	return run.ID, taskIDs, nil
+}
+
+// CreateSlackSyncPipeline creates a pipeline run for a native Slack sync.
+func CreateSlackSyncPipeline(ctx context.Context, s *store.Store, projectID uuid.UUID) (uuid.UUID, []uuid.UUID, error) {
+	run, err := s.CreatePipelineRun(ctx, projectID, domain.PipelineTypeSlackSync, nil)
+	if err != nil {
+		return uuid.Nil, nil, err
+	}
+
+	taskNames := []string{"slack_sync", "embed"}
 	taskIDs := make([]uuid.UUID, len(taskNames))
 	for i, name := range taskNames {
 		task, err := s.CreatePipelineTask(ctx, run.ID, name, i)

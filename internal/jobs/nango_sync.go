@@ -2,10 +2,12 @@ package jobs
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/riverqueue/river"
 
 	"github.com/neuco-ai/neuco/internal/config"
@@ -60,16 +62,20 @@ func (w *NangoSyncWorker) Work(ctx context.Context, job *river.Job[NangoSyncJobA
 		return fmt.Errorf("nango_sync: fetch signals: %w", err)
 	}
 
-	// Insert each signal into the DB.
+	// Insert each signal into the DB, skipping exact duplicates.
 	insertedCount := 0
+	dedupCount := 0
 	for i := range signals {
 		if _, insertErr := w.store.InsertSignal(ctx, signals[i]); insertErr != nil {
+			if errors.Is(insertErr, store.ErrDuplicateSignal) {
+				dedupCount++
+				continue
+			}
 			slog.Error("nango_sync: insert signal failed",
 				"provider", args.Provider,
 				"source_ref", signals[i].SourceRef,
 				"error", insertErr,
 			)
-			// Continue — partial success is better than aborting.
 			continue
 		}
 		insertedCount++
@@ -80,6 +86,7 @@ func (w *NangoSyncWorker) Work(ctx context.Context, job *river.Job[NangoSyncJobA
 		"connection_id", args.ConnectionID,
 		"total_fetched", len(signals),
 		"total_inserted", insertedCount,
+		"deduplicated", dedupCount,
 	)
 
 	// Stamp last_sync_at on the integration record.
@@ -105,14 +112,25 @@ func (w *NangoSyncWorker) Work(ctx context.Context, job *river.Job[NangoSyncJobA
 }
 
 // fetchSignals dispatches to the correct provider-specific sync method.
+// When sinceTime is non-nil, providers that support incremental sync will only
+// fetch data newer than that timestamp.
 func (w *NangoSyncWorker) fetchSignals(
 	ctx context.Context,
 	svc *nango.SyncService,
 	args NangoSyncJobArgs,
 ) ([]domain.Signal, error) {
+	// Look up last_sync_at for incremental sync support.
+	var sinceTime *time.Time
+	if args.IntegrationID != uuid.Nil {
+		intg, err := w.store.GetIntegrationInternal(ctx, args.IntegrationID)
+		if err == nil && intg.LastSyncAt != nil {
+			sinceTime = intg.LastSyncAt
+		}
+	}
+
 	switch args.Provider {
 	case "gong":
-		return svc.SyncGong(ctx, args.ConnectionID, args.ProjectID)
+		return svc.SyncGongSince(ctx, args.ConnectionID, args.ProjectID, sinceTime)
 	case "intercom":
 		return svc.SyncIntercom(ctx, args.ConnectionID, args.ProjectID)
 	case "slack":
@@ -158,4 +176,89 @@ func (w *NangoSyncWorker) enqueueEmbed(ctx context.Context, args NangoSyncJobArg
 	if _, err := client.Insert(ctx, embedArgs, nil); err != nil {
 		slog.Warn("nango_sync: failed to enqueue embed job", "error", err)
 	}
+}
+
+// ============================================================================
+// Periodic Sync Worker
+// ============================================================================
+
+// SyncAllIntegrationsWorker is a River worker that iterates over all active
+// non-webhook integrations and enqueues individual NangoSyncJobArgs for each.
+// It is designed to be enqueued on a cron-like schedule (e.g. every 6 hours)
+// to keep all Gong/Intercom/Slack connections synced automatically.
+type SyncAllIntegrationsWorker struct {
+	river.WorkerDefaults[SyncAllIntegrationsJobArgs]
+	store *store.Store
+	cfg   *config.Config
+}
+
+// NewSyncAllIntegrationsWorker constructs a SyncAllIntegrationsWorker.
+func NewSyncAllIntegrationsWorker(s *store.Store, cfg *config.Config) *SyncAllIntegrationsWorker {
+	return &SyncAllIntegrationsWorker{store: s, cfg: cfg}
+}
+
+// Work implements river.Worker[SyncAllIntegrationsJobArgs].
+func (w *SyncAllIntegrationsWorker) Work(ctx context.Context, _ *river.Job[SyncAllIntegrationsJobArgs]) error {
+	slog.Info("sync_all_integrations: starting periodic sync for all active integrations")
+
+	intgs, err := w.store.ListAllActiveIntegrationsInternal(ctx)
+	if err != nil {
+		return fmt.Errorf("sync_all_integrations: list integrations: %w", err)
+	}
+
+	if len(intgs) == 0 {
+		slog.Info("sync_all_integrations: no active integrations found")
+		return nil
+	}
+
+	client := getRiverClient()
+	if client == nil {
+		return fmt.Errorf("sync_all_integrations: river client not available")
+	}
+
+	enqueued := 0
+	for _, intg := range intgs {
+		// Extract connectionID from integration config (stored by Nango connection handler).
+		connectionID, _ := intg.Config["connection_id"].(string)
+		if connectionID == "" {
+			slog.Warn("sync_all_integrations: skipping integration without connection_id",
+				"integration_id", intg.ID,
+				"provider", intg.Provider,
+			)
+			continue
+		}
+
+		runID, taskIDs, err := CreateNangoSyncPipeline(ctx, w.store, intg.ProjectID)
+		if err != nil {
+			slog.Error("sync_all_integrations: create pipeline",
+				"integration_id", intg.ID,
+				"error", err,
+			)
+			continue
+		}
+
+		_, err = client.Insert(ctx, NangoSyncJobArgs{
+			ProjectID:     intg.ProjectID,
+			ConnectionID:  connectionID,
+			Provider:      intg.Provider,
+			IntegrationID: intg.ID,
+			RunID:         runID,
+			TaskID:        taskIDs[0],
+		}, &river.InsertOpts{Queue: "default"})
+		if err != nil {
+			slog.Error("sync_all_integrations: enqueue sync job",
+				"integration_id", intg.ID,
+				"error", err,
+			)
+			continue
+		}
+		enqueued++
+	}
+
+	slog.Info("sync_all_integrations: enqueued sync jobs",
+		"total_integrations", len(intgs),
+		"enqueued", enqueued,
+	)
+
+	return nil
 }

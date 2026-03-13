@@ -74,6 +74,14 @@ type WriteCandidatesJobArgs struct {
 
 func (WriteCandidatesJobArgs) Kind() string { return "write_candidates" }
 
+type UpdateContextJobArgs struct {
+	ProjectID uuid.UUID `json:"project_id"`
+	RunID     uuid.UUID `json:"run_id"`
+	TaskID    uuid.UUID `json:"task_id"`
+}
+
+func (UpdateContextJobArgs) Kind() string { return "update_context" }
+
 // ============================================================
 // Spec Generation Pipeline
 // ============================================================
@@ -161,6 +169,11 @@ type DigestAllProjectsJobArgs struct{}
 
 func (DigestAllProjectsJobArgs) Kind() string { return "digest_all_projects" }
 
+// DigestEmailsJobArgs triggers weekly digest emails for all orgs.
+type DigestEmailsJobArgs struct{}
+
+func (DigestEmailsJobArgs) Kind() string { return "digest_emails" }
+
 // ============================================================
 // Copilot
 // ============================================================
@@ -174,6 +187,20 @@ type CopilotReviewJobArgs struct {
 }
 
 func (CopilotReviewJobArgs) Kind() string { return "copilot_review" }
+
+// ============================================================
+// Transactional Email
+// ============================================================
+
+// SendEmailJobArgs enqueues a transactional email for async delivery.
+// EmailType determines which template to render; Payload carries the
+// template-specific data as JSON.
+type SendEmailJobArgs struct {
+	EmailType string          `json:"email_type"` // welcome, invite, pr_created, weekly_digest
+	Payload   json.RawMessage `json:"payload"`
+}
+
+func (SendEmailJobArgs) Kind() string { return "send_email" }
 
 // ============================================================
 // Nango Integration Sync
@@ -193,3 +220,65 @@ type NangoSyncJobArgs struct {
 }
 
 func (NangoSyncJobArgs) Kind() string { return "nango_sync" }
+
+// SyncAllIntegrationsJobArgs triggers a periodic sweep that enqueues individual
+// NangoSyncJobArgs for every active non-webhook integration.
+type SyncAllIntegrationsJobArgs struct{}
+
+func (SyncAllIntegrationsJobArgs) Kind() string { return "sync_all_integrations" }
+
+// ============================================================
+// Native Intercom Sync
+// ============================================================
+
+// IntercomSyncJobArgs carries the parameters for a native Intercom sync job.
+type IntercomSyncJobArgs struct {
+	ProjectID     uuid.UUID `json:"project_id"`
+	IntegrationID uuid.UUID `json:"integration_id"`
+	RunID         uuid.UUID `json:"run_id"`
+	TaskID        uuid.UUID `json:"task_id"`
+}
+
+func (IntercomSyncJobArgs) Kind() string { return "intercom_sync" }
+
+// ============================================================
+// Native Slack Sync
+// ============================================================
+
+// SlackSyncJobArgs carries the parameters for a native Slack sync job.
+type SlackSyncJobArgs struct {
+	ProjectID     uuid.UUID `json:"project_id"`
+	IntegrationID uuid.UUID `json:"integration_id"`
+	RunID         uuid.UUID `json:"run_id"`
+	TaskID        uuid.UUID `json:"task_id"`
+}
+
+func (SlackSyncJobArgs) Kind() string { return "slack_sync" }
+
+// ============================================================
+// Native Linear Sync
+// ============================================================
+
+// LinearSyncJobArgs carries the parameters for a native Linear sync job.
+type LinearSyncJobArgs struct {
+	ProjectID     uuid.UUID `json:"project_id"`
+	IntegrationID uuid.UUID `json:"integration_id"`
+	RunID         uuid.UUID `json:"run_id"`
+	TaskID        uuid.UUID `json:"task_id"`
+}
+
+func (LinearSyncJobArgs) Kind() string { return "linear_sync" }
+
+// ============================================================
+// Native Jira Sync
+// ============================================================
+
+// JiraSyncJobArgs carries the parameters for a native Jira sync job.
+type JiraSyncJobArgs struct {
+	ProjectID     uuid.UUID `json:"project_id"`
+	IntegrationID uuid.UUID `json:"integration_id"`
+	RunID         uuid.UUID `json:"run_id"`
+	TaskID        uuid.UUID `json:"task_id"`
+}
+
+func (JiraSyncJobArgs) Kind() string { return "jira_sync" }

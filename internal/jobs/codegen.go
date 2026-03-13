@@ -373,7 +373,21 @@ func (w *GenerateCodeWorker) Work(ctx context.Context, job *river.Job[GenerateCo
 	}
 
 	// Generate code via LLM, enriched with codebase context when available.
-	files, err := generateCodeViaLLM(ctx, w.cfg.AnthropicAPIKey, spec, project, job.Args.CodegenContext)
+	llmStart := time.Now()
+	files, llmResp, err := generateCodeViaLLM(ctx, w.cfg.AnthropicAPIKey, spec, project, job.Args.CodegenContext)
+	llmLatency := trackDuration(llmStart)
+	if llmResp != nil {
+		errMsg := ""
+		if err != nil {
+			errMsg = err.Error()
+		}
+		recordLLMCall(ctx, w.store, job.Args.ProjectID,
+			ptrUUID(job.Args.RunID), ptrUUID(job.Args.TaskID),
+			domain.LLMProviderAnthropic, "claude-sonnet-4-6-20250514",
+			domain.LLMCallTypeCodegen,
+			llmResp.Usage.InputTokens, llmResp.Usage.OutputTokens, llmLatency,
+			errMsg)
+	}
 	if err != nil {
 		FailTask(ctx, w.store, job.Args.TaskID, err)
 		CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
@@ -427,14 +441,14 @@ func (w *GenerateCodeWorker) Work(ctx context.Context, job *river.Job[GenerateCo
 	return nil
 }
 
-func generateCodeViaLLM(ctx context.Context, apiKey string, spec *domain.Spec, project *domain.Project, codegenContext string) ([]domain.GeneratedFile, error) {
+func generateCodeViaLLM(ctx context.Context, apiKey string, spec *domain.Spec, project *domain.Project, codegenContext string) ([]domain.GeneratedFile, *anthropicResponse, error) {
 	if apiKey == "" {
 		return []domain.GeneratedFile{
 			{
 				Path:    fmt.Sprintf("src/components/%s.tsx", sanitizeFileName(spec.ProposedSolution)),
 				Content: "// API key not configured. Generated code would appear here.",
 			},
-		}, nil
+		}, nil, nil
 	}
 
 	userStoriesJSON, _ := json.Marshal(spec.UserStories)
@@ -486,12 +500,12 @@ Rules:
 
 	body, err := json.Marshal(payload)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	req, err := newHTTPRequest(ctx, "POST", "https://api.anthropic.com/v1/messages", body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("x-api-key", apiKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
@@ -499,21 +513,17 @@ Rules:
 
 	resp, err := doHTTPRequest(req)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	defer resp.Body.Close()
 
-	var result struct {
-		Content []struct {
-			Text string `json:"text"`
-		} `json:"content"`
-	}
+	var result anthropicResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	if len(result.Content) == 0 {
-		return nil, fmt.Errorf("empty response from LLM")
+		return nil, &result, fmt.Errorf("empty response from LLM")
 	}
 
 	text := result.Content[0].Text
@@ -529,10 +539,10 @@ Rules:
 	if err := json.Unmarshal([]byte(text), &files); err != nil {
 		return []domain.GeneratedFile{
 			{Path: "generated-output.txt", Content: result.Content[0].Text},
-		}, nil
+		}, &result, nil
 	}
 
-	return files, nil
+	return files, &result, nil
 }
 
 func findJSONArrayStart(s string) int {
@@ -836,10 +846,10 @@ func (w *NotifyWorker) Work(ctx context.Context, job *river.Job[NotifyJobArgs]) 
 		return err
 	}
 
-	// Send notification via Resend if configured
-	if w.cfg.ResendAPIKey != "" {
-		if err := sendGenerationNotification(ctx, w.cfg, w.store, gen); err != nil {
-			slog.Error("failed to send generation notification",
+	// Enqueue PR-created email notification via the async email job.
+	if gen.PRURL != "" {
+		if err := w.enqueuePRNotification(ctx, gen); err != nil {
+			slog.Error("failed to enqueue PR notification email",
 				"generation_id", gen.ID,
 				"error", err,
 			)
@@ -866,62 +876,31 @@ func (w *NotifyWorker) Work(ctx context.Context, job *river.Job[NotifyJobArgs]) 
 	return nil
 }
 
-// sendGenerationNotification emails the project creator about a completed
-// generation using the Resend transactional email API.
-func sendGenerationNotification(ctx context.Context, cfg *config.Config, s *store.Store, gen *domain.Generation) error {
-	// Look up the project to find the creator's user ID.
-	project, err := s.GetProjectInternal(ctx, gen.ProjectID)
+// enqueuePRNotification enqueues an async email job for the PR-created notification.
+func (w *NotifyWorker) enqueuePRNotification(ctx context.Context, gen *domain.Generation) error {
+	project, err := w.store.GetProjectInternal(ctx, gen.ProjectID)
 	if err != nil {
-		return fmt.Errorf("sendGenerationNotification: get project: %w", err)
+		return fmt.Errorf("enqueuePRNotification: get project: %w", err)
 	}
 
-	// Look up the creator's email address.
-	user, err := s.GetUserByID(ctx, project.CreatedBy)
+	user, err := w.store.GetUserByID(ctx, project.CreatedBy)
 	if err != nil {
-		return fmt.Errorf("sendGenerationNotification: get user: %w", err)
+		return fmt.Errorf("enqueuePRNotification: get user: %w", err)
+	}
+	if user.Email == "" {
+		return nil
 	}
 
-	subject := fmt.Sprintf("Neuco: code generation completed for project %s", project.Name)
-	body := fmt.Sprintf(
-		"Your code generation run has completed.\n\nProject: %s\nGeneration ID: %s\nFiles generated: %d\n",
-		project.Name, gen.ID.String(), len(gen.Files),
-	)
-	if gen.PRURL != "" {
-		body += fmt.Sprintf("\nPull Request: %s\n", gen.PRURL)
+	prNumber := 0
+	if gen.PRNumber != nil {
+		prNumber = *gen.PRNumber
 	}
 
-	payload := map[string]interface{}{
-		"from":    "Neuco <noreply@neuco.ai>",
-		"to":      []string{user.Email},
-		"subject": subject,
-		"text":    body,
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return fmt.Errorf("sendGenerationNotification: marshal payload: %w", err)
-	}
-
-	req, err := newHTTPRequest(ctx, "POST", "https://api.resend.com/emails", payloadBytes)
-	if err != nil {
-		return fmt.Errorf("sendGenerationNotification: build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+cfg.ResendAPIKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := doHTTPRequest(req)
-	if err != nil {
-		return fmt.Errorf("sendGenerationNotification: http: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 400 {
-		return fmt.Errorf("sendGenerationNotification: resend returned status %d", resp.StatusCode)
-	}
-
-	slog.Info("generation notification sent",
-		"generation_id", gen.ID,
-		"recipient", user.Email,
-	)
-	return nil
+	return EnqueueEmail(ctx, "pr_created", map[string]interface{}{
+		"email":        user.Email,
+		"project_name": project.Name,
+		"pr_url":       gen.PRURL,
+		"pr_number":    prNumber,
+		"files_count":  len(gen.Files),
+	})
 }
