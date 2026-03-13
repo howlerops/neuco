@@ -22,6 +22,7 @@ const (
 	SignalSourceMixpanel  SignalSource = "mixpanel"
 	SignalSourceCSV       SignalSource = "csv"
 	SignalSourceManual    SignalSource = "manual"
+	SignalSourceJira      SignalSource = "jira"
 	SignalSourceWebhook   SignalSource = "webhook"
 )
 
@@ -41,6 +42,7 @@ const (
 	SignalTypeSlackMessage    SignalType = "slack_message"
 	SignalTypeGitHubIssue     SignalType = "github_issue"
 	SignalTypeLinearIssue     SignalType = "linear_issue"
+	SignalTypeJiraIssue      SignalType = "jira_issue"
 	SignalTypeUsageAnomaly    SignalType = "usage_anomaly"
 	SignalTypeNote            SignalType = "note"
 	SignalTypeEvent           SignalType = "event"
@@ -63,4 +65,12 @@ type Signal struct {
 	// Embedding is stored as a pgvector vector column. It is nil until the
 	// background embedder worker processes the signal.
 	Embedding []float32 `json:"embedding,omitempty"`
+
+	// ContentHash is a SHA-256 hex digest of the normalised content, used for
+	// exact deduplication within a project.
+	ContentHash string `json:"content_hash,omitempty"`
+
+	// DuplicateOfID links this signal to the original signal it duplicates.
+	// Nil means this signal is an original (not a duplicate).
+	DuplicateOfID *uuid.UUID `json:"duplicate_of_id,omitempty"`
 }

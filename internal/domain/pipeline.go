@@ -37,7 +37,11 @@ const (
 	PipelineTypeCodegen   PipelineType = "codegen"
 	PipelineTypeDigest    PipelineType = "digest"
 	PipelineTypeCopilot   PipelineType = "copilot"
-	PipelineTypeNangoSync PipelineType = "nango_sync"
+	PipelineTypeNangoSync    PipelineType = "nango_sync"
+	PipelineTypeIntercomSync PipelineType = "intercom_sync"
+	PipelineTypeSlackSync    PipelineType = "slack_sync"
+	PipelineTypeLinearSync   PipelineType = "linear_sync"
+	PipelineTypeJiraSync     PipelineType = "jira_sync"
 )
 
 // PipelineRun is the top-level record for a workflow execution.
