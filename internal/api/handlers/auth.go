@@ -7,12 +7,16 @@ import (
 	"net/http"
 	"time"
 
+	"log/slog"
+
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
-	"github.com/neuco-ai/neuco/internal/domain"
 	mw "github.com/neuco-ai/neuco/internal/api/middleware"
+	"github.com/neuco-ai/neuco/internal/domain"
+	"github.com/neuco-ai/neuco/internal/jobs"
 	"golang.org/x/oauth2"
 	githuboauth "golang.org/x/oauth2/github"
+	"golang.org/x/oauth2/google"
 )
 
 // githubUser is the response from the GitHub user API endpoint.
@@ -28,6 +32,7 @@ type githubUser struct {
 type tokenPair struct {
 	AccessToken string `json:"access_token"`
 	ExpiresIn   int    `json:"expires_in"` // seconds
+	IsNew       bool   `json:"is_new"`     // true on first-ever login (signup)
 }
 
 const (
@@ -196,8 +201,9 @@ func GitHubCallback(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		isNewUser := len(orgs) == 0
 		var primaryOrg domain.Organization
-		if len(orgs) == 0 {
+		if isNewUser {
 			// First login — create personal org and add user as owner.
 			slug := fmt.Sprintf("%s-personal", ghUser.Login)
 			primaryOrg, err = d.Store.CreateOrg(r.Context(), fmt.Sprintf("%s's workspace", ghUser.Login), slug, domain.OrgPlanStarter)
@@ -208,6 +214,16 @@ func GitHubCallback(d *Deps) http.HandlerFunc {
 			if _, err := d.Store.AddMember(r.Context(), primaryOrg.ID, user.ID, domain.OrgRoleOwner); err != nil {
 				respondErr(w, r, http.StatusInternalServerError, "failed to add owner to personal org")
 				return
+			}
+
+			// Enqueue welcome email (non-blocking — failure doesn't break signup).
+			if user.Email != "" {
+				if err := jobs.EnqueueEmail(r.Context(), "welcome", map[string]string{
+					"email":     user.Email,
+					"user_name": user.GitHubLogin,
+				}); err != nil {
+					slog.Error("failed to enqueue welcome email", "user_id", user.ID, "error", err)
+				}
 			}
 		} else {
 			primaryOrg = orgs[0]
@@ -224,6 +240,166 @@ func GitHubCallback(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		tokens.pair.IsNew = isNewUser
+		setRefreshCookie(w, d, tokens.refreshToken)
+		respondOK(w, r, tokens.pair)
+	}
+}
+
+// googleUser is the response from the Google userinfo API endpoint.
+type googleUser struct {
+	Sub       string `json:"sub"` // Google's unique user ID
+	Email     string `json:"email"`
+	Name      string `json:"name"`
+	Picture   string `json:"picture"`
+	Verified  bool   `json:"email_verified"`
+}
+
+func googleOAuthConfig(d *Deps) *oauth2.Config {
+	return &oauth2.Config{
+		ClientID:     d.Config.GoogleClientID,
+		ClientSecret: d.Config.GoogleClientSecret,
+		Scopes:       []string{"openid", "email", "profile"},
+		Endpoint:     google.Endpoint,
+	}
+}
+
+func fetchGoogleUser(ctx context.Context, accessToken string) (*googleUser, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.googleapis.com/oauth2/v3/userinfo", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+accessToken)
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("google userinfo API returned status %d", resp.StatusCode)
+	}
+
+	var gu googleUser
+	if err := json.NewDecoder(resp.Body).Decode(&gu); err != nil {
+		return nil, err
+	}
+	return &gu, nil
+}
+
+// GoogleCallback handles POST /api/v1/auth/google/callback.
+// Exchanges the OAuth code for a Google access token, fetches the user profile,
+// upserts the user (linking to existing account by email if applicable),
+// auto-creates a personal org on first login, and issues a JWT pair.
+func GoogleCallback(d *Deps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if d.Config.GoogleClientID == "" {
+			respondErr(w, r, http.StatusServiceUnavailable, "Google SSO not configured")
+			return
+		}
+
+		var req struct {
+			Code        string `json:"code"`
+			RedirectURI string `json:"redirect_uri"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Code == "" {
+			respondErr(w, r, http.StatusBadRequest, "missing or invalid code")
+			return
+		}
+
+		cfg := googleOAuthConfig(d)
+		if req.RedirectURI != "" {
+			cfg.RedirectURL = req.RedirectURI
+		}
+
+		gToken, err := cfg.Exchange(r.Context(), req.Code)
+		if err != nil {
+			respondErr(w, r, http.StatusBadRequest, "failed to exchange OAuth code: "+err.Error())
+			return
+		}
+
+		gUser, err := fetchGoogleUser(r.Context(), gToken.AccessToken)
+		if err != nil {
+			respondErr(w, r, http.StatusBadGateway, "failed to fetch Google user: "+err.Error())
+			return
+		}
+
+		if !gUser.Verified {
+			respondErr(w, r, http.StatusBadRequest, "Google email is not verified")
+			return
+		}
+
+		// Try to find existing user by email to link accounts.
+		var user domain.User
+		existingUser, err := d.Store.GetUserByEmail(r.Context(), gUser.Email)
+		if err == nil {
+			// Existing user found — link Google account.
+			user, err = d.Store.LinkGoogleToExistingUser(r.Context(), gUser.Email, gUser.Sub, gUser.Name, gUser.Picture)
+			if err != nil {
+				slog.Warn("google callback: failed to link account, falling back to upsert", "error", err)
+				user = existingUser
+			}
+		} else {
+			// No existing user — upsert by Google ID.
+			user, err = d.Store.UpsertUserByGoogle(r.Context(), gUser.Sub, gUser.Email, gUser.Name, gUser.Picture)
+			if err != nil {
+				respondErr(w, r, http.StatusInternalServerError, "failed to upsert user")
+				return
+			}
+		}
+
+		// Check if this user already has orgs; if not, create a personal org.
+		orgs, err := d.Store.ListUserOrgs(r.Context(), user.ID)
+		if err != nil {
+			respondErr(w, r, http.StatusInternalServerError, "failed to fetch user orgs")
+			return
+		}
+
+		isNewUser := len(orgs) == 0
+		var primaryOrg domain.Organization
+		if isNewUser {
+			// First login — create personal org and add user as owner.
+			displayName := gUser.Name
+			if displayName == "" {
+				displayName = gUser.Email
+			}
+			slug := fmt.Sprintf("%s-personal", user.ID.String()[:8])
+			primaryOrg, err = d.Store.CreateOrg(r.Context(), fmt.Sprintf("%s's workspace", displayName), slug, domain.OrgPlanStarter)
+			if err != nil {
+				respondErr(w, r, http.StatusInternalServerError, "failed to create personal org")
+				return
+			}
+			if _, err := d.Store.AddMember(r.Context(), primaryOrg.ID, user.ID, domain.OrgRoleOwner); err != nil {
+				respondErr(w, r, http.StatusInternalServerError, "failed to add owner to personal org")
+				return
+			}
+
+			// Enqueue welcome email.
+			if user.Email != "" {
+				if err := jobs.EnqueueEmail(r.Context(), "welcome", map[string]string{
+					"email":     user.Email,
+					"user_name": displayName,
+				}); err != nil {
+					slog.Error("failed to enqueue welcome email", "user_id", user.ID, "error", err)
+				}
+			}
+		} else {
+			primaryOrg = orgs[0]
+		}
+
+		role, err := d.Store.GetMemberRole(r.Context(), primaryOrg.ID, user.ID)
+		if err != nil {
+			role = domain.OrgRoleOwner
+		}
+
+		tokens, err := issueTokenPair(d, user, primaryOrg.ID, role)
+		if err != nil {
+			respondErr(w, r, http.StatusInternalServerError, "failed to issue tokens")
+			return
+		}
+
+		tokens.pair.IsNew = isNewUser
 		setRefreshCookie(w, d, tokens.refreshToken)
 		respondOK(w, r, tokens.pair)
 	}

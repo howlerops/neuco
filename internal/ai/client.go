@@ -68,6 +68,7 @@ type LLMClient struct {
 	AnthropicKey string
 	OpenAIKey    string
 	httpClient   *http.Client
+	aiBreaker    *circuitBreaker
 }
 
 const (
@@ -90,6 +91,7 @@ func NewLLMClient(anthropicKey, openAIKey string) *LLMClient {
 		httpClient: &http.Client{
 			Timeout: 120 * time.Second,
 		},
+		aiBreaker: newCircuitBreaker(5, 30*time.Second),
 	}
 }
 
@@ -181,19 +183,31 @@ func (c *LLMClient) GenerateEmbeddingBatch(ctx context.Context, texts []string) 
 // ChatSonnet sends a single-turn system+user prompt to Claude Sonnet and
 // returns the first text content block.
 func (c *LLMClient) ChatSonnet(ctx context.Context, systemPrompt, userPrompt string, maxTokens int) (string, error) {
+	text, _, err := c.chatClaude(ctx, sonnetModel, systemPrompt, userPrompt, maxTokens)
+	return text, err
+}
+
+// ChatSonnetWithUsage is like ChatSonnet but also returns LLM call info.
+func (c *LLMClient) ChatSonnetWithUsage(ctx context.Context, systemPrompt, userPrompt string, maxTokens int) (string, *LLMCallInfo, error) {
 	return c.chatClaude(ctx, sonnetModel, systemPrompt, userPrompt, maxTokens)
 }
 
 // ChatHaiku sends a single-turn system+user prompt to Claude Haiku and
 // returns the first text content block.
 func (c *LLMClient) ChatHaiku(ctx context.Context, systemPrompt, userPrompt string, maxTokens int) (string, error) {
+	text, _, err := c.chatClaude(ctx, haikuModel, systemPrompt, userPrompt, maxTokens)
+	return text, err
+}
+
+// ChatHaikuWithUsage is like ChatHaiku but also returns LLM call info.
+func (c *LLMClient) ChatHaikuWithUsage(ctx context.Context, systemPrompt, userPrompt string, maxTokens int) (string, *LLMCallInfo, error) {
 	return c.chatClaude(ctx, haikuModel, systemPrompt, userPrompt, maxTokens)
 }
 
-func (c *LLMClient) chatClaude(ctx context.Context, model, systemPrompt, userPrompt string, maxTokens int) (string, error) {
+func (c *LLMClient) chatClaude(ctx context.Context, model, systemPrompt, userPrompt string, maxTokens int) (string, *LLMCallInfo, error) {
 	if c.AnthropicKey == "" {
 		slog.Warn("ai: no Anthropic key configured, returning empty response")
-		return "", nil
+		return "", nil, nil
 	}
 
 	if maxTokens <= 0 {
@@ -209,12 +223,20 @@ func (c *LLMClient) chatClaude(ctx context.Context, model, systemPrompt, userPro
 		},
 	}
 
+	start := time.Now()
 	var resp anthropicMessagesResponse
 	if err := c.doAnthropic(ctx, "POST", "/v1/messages", payload, &resp); err != nil {
-		return "", fmt.Errorf("ai.%s: %w", model, err)
+		return "", nil, fmt.Errorf("ai.%s: %w", model, err)
 	}
 
-	return resp.firstText(), nil
+	info := &LLMCallInfo{
+		Model:     model,
+		TokensIn:  resp.Usage.InputTokens,
+		TokensOut: resp.Usage.OutputTokens,
+		LatencyMs: int(time.Since(start).Milliseconds()),
+	}
+
+	return resp.firstText(), info, nil
 }
 
 // ChatWithTools sends a multi-turn conversation with tool definitions to
@@ -228,10 +250,10 @@ func (c *LLMClient) ChatWithTools(
 	messages []Message,
 	tools []ToolDef,
 	maxTokens int,
-) (*ToolCallResponse, error) {
+) (*ToolCallResponse, *LLMCallInfo, error) {
 	if c.AnthropicKey == "" {
 		slog.Warn("ai: no Anthropic key configured, returning empty tool response")
-		return &ToolCallResponse{StopReason: "end_turn"}, nil
+		return &ToolCallResponse{StopReason: "end_turn"}, nil, nil
 	}
 
 	if maxTokens <= 0 {
@@ -255,9 +277,17 @@ func (c *LLMClient) ChatWithTools(
 		"tools":      tools,
 	}
 
+	start := time.Now()
 	var resp anthropicMessagesResponse
 	if err := c.doAnthropic(ctx, "POST", "/v1/messages", payload, &resp); err != nil {
-		return nil, fmt.Errorf("ai.ChatWithTools: %w", err)
+		return nil, nil, fmt.Errorf("ai.ChatWithTools: %w", err)
+	}
+
+	info := &LLMCallInfo{
+		Model:     model,
+		TokensIn:  resp.Usage.InputTokens,
+		TokensOut: resp.Usage.OutputTokens,
+		LatencyMs: int(time.Since(start).Milliseconds()),
 	}
 
 	tcr := &ToolCallResponse{
@@ -273,7 +303,7 @@ func (c *LLMClient) ChatWithTools(
 			})
 		}
 	}
-	return tcr, nil
+	return tcr, info, nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -290,6 +320,18 @@ type anthropicMessagesResponse struct {
 		Name  string          `json:"name,omitempty"`
 		Input json.RawMessage `json:"input,omitempty"`
 	} `json:"content"`
+	Usage struct {
+		InputTokens  int `json:"input_tokens"`
+		OutputTokens int `json:"output_tokens"`
+	} `json:"usage"`
+}
+
+// LLMCallInfo holds usage details from a completed LLM API call.
+type LLMCallInfo struct {
+	Model     string
+	TokensIn  int
+	TokensOut int
+	LatencyMs int
 }
 
 func (r anthropicMessagesResponse) firstText() string {
@@ -305,23 +347,53 @@ func (r anthropicMessagesResponse) firstText() string {
 // HTTP helpers
 // ──────────────────────────────────────────────────────────────────────────────
 
+const (
+	aiCallTimeout = 30 * time.Second
+)
+
 func (c *LLMClient) doAnthropic(ctx context.Context, method, path string, payload, out interface{}) error {
-	return c.doWithRetry(ctx, method, "https://api.anthropic.com"+path, payload, out,
+	if !c.aiBreaker.allow() {
+		return ErrCircuitOpen
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, aiCallTimeout)
+	defer cancel()
+
+	err := c.doWithRetry(ctx, method, "https://api.anthropic.com"+path, payload, out,
 		func(req *http.Request) {
 			req.Header.Set("x-api-key", c.AnthropicKey)
 			req.Header.Set("anthropic-version", anthropicVersion)
 			req.Header.Set("Content-Type", "application/json")
 		},
 	)
+	if err != nil {
+		c.aiBreaker.recordFailure()
+		return err
+	}
+	c.aiBreaker.recordSuccess()
+	return nil
 }
 
 func (c *LLMClient) doOpenAI(ctx context.Context, method, path string, payload, out interface{}) error {
-	return c.doWithRetry(ctx, method, "https://api.openai.com"+path, payload, out,
+	if !c.aiBreaker.allow() {
+		return ErrCircuitOpen
+	}
+
+	ctx, cancel := context.WithTimeout(ctx, aiCallTimeout)
+	defer cancel()
+
+	err := c.doWithRetry(ctx, method, "https://api.openai.com"+path, payload, out,
 		func(req *http.Request) {
 			req.Header.Set("Authorization", "Bearer "+c.OpenAIKey)
 			req.Header.Set("Content-Type", "application/json")
 		},
 	)
+	if err != nil {
+		c.aiBreaker.recordFailure()
+		return err
+	}
+	c.aiBreaker.recordSuccess()
+	return nil
 }
 
 // doWithRetry serialises payload to JSON, sends the request with setHeaders

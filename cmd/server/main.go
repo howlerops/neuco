@@ -16,6 +16,7 @@ import (
 	"github.com/neuco-ai/neuco/internal/api"
 	"github.com/neuco-ai/neuco/internal/config"
 	"github.com/neuco-ai/neuco/internal/jobs"
+	"github.com/neuco-ai/neuco/internal/observability"
 	"github.com/neuco-ai/neuco/internal/store"
 )
 
@@ -25,6 +26,10 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	observability.InitLogging("neuco-api", cfg.AppEnv)
+	flushSentry := observability.InitSentry(cfg, "neuco-api")
+	defer flushSentry()
 
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {

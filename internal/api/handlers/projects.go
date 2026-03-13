@@ -50,6 +50,18 @@ func CreateProject(d *Deps) http.HandlerFunc {
 			respondErr(w, r, http.StatusBadRequest, "name is required")
 			return
 		}
+		if msg := validateStringLen("name", req.Name, MaxNameLen); msg != "" {
+			respondErr(w, r, http.StatusBadRequest, msg)
+			return
+		}
+		if !isValidFramework(req.Framework) {
+			respondErr(w, r, http.StatusBadRequest, "invalid framework")
+			return
+		}
+		if !isValidStyling(req.Styling) {
+			respondErr(w, r, http.StatusBadRequest, "invalid styling")
+			return
+		}
 
 		userID := mw.UserIDFromCtx(r.Context())
 
@@ -103,7 +115,19 @@ func UpdateProject(d *Deps) http.HandlerFunc {
 		var name *string
 		if req.Name != nil {
 			trimmed := strings.TrimSpace(*req.Name)
+			if msg := validateStringLen("name", trimmed, MaxNameLen); msg != "" {
+				respondErr(w, r, http.StatusBadRequest, msg)
+				return
+			}
 			name = &trimmed
+		}
+		if req.Framework != nil && !isValidFramework(*req.Framework) {
+			respondErr(w, r, http.StatusBadRequest, "invalid framework")
+			return
+		}
+		if req.Styling != nil && !isValidStyling(*req.Styling) {
+			respondErr(w, r, http.StatusBadRequest, "invalid styling")
+			return
 		}
 
 		updated, err := d.Store.UpdateProject(r.Context(), orgID, projectID, name, req.GitHubRepo, req.Framework, req.Styling)

@@ -24,6 +24,10 @@ type Config struct {
 	GitHubClientID     string `mapstructure:"GITHUB_CLIENT_ID"`
 	GitHubClientSecret string `mapstructure:"GITHUB_CLIENT_SECRET"`
 
+	// Google OAuth / SSO (user login)
+	GoogleClientID     string `mapstructure:"GOOGLE_CLIENT_ID"`
+	GoogleClientSecret string `mapstructure:"GOOGLE_CLIENT_SECRET"`
+
 	// GitHub App (repo operations)
 	GitHubAppID             string `mapstructure:"GITHUB_APP_ID"`
 	GitHubAppPrivateKeyPath string `mapstructure:"GITHUB_APP_PRIVATE_KEY_PATH"`
@@ -43,6 +47,36 @@ type Config struct {
 	NangoServerURL string `mapstructure:"NANGO_SERVER_URL"`
 	NangoSecretKey string `mapstructure:"NANGO_SECRET_KEY"`
 	NangoPublicKey string `mapstructure:"NANGO_PUBLIC_KEY"`
+
+	// Intercom (native OAuth integration)
+	IntercomClientID      string `mapstructure:"INTERCOM_CLIENT_ID"`
+	IntercomClientSecret  string `mapstructure:"INTERCOM_CLIENT_SECRET"`
+	IntercomWebhookSecret string `mapstructure:"INTERCOM_WEBHOOK_SECRET"`
+
+	// Slack (native OAuth integration)
+	SlackClientID     string `mapstructure:"SLACK_CLIENT_ID"`
+	SlackClientSecret string `mapstructure:"SLACK_CLIENT_SECRET"`
+	SlackSigningSecret string `mapstructure:"SLACK_SIGNING_SECRET"`
+
+	// Linear (native OAuth integration)
+	LinearClientID      string `mapstructure:"LINEAR_CLIENT_ID"`
+	LinearClientSecret  string `mapstructure:"LINEAR_CLIENT_SECRET"`
+	LinearWebhookSecret string `mapstructure:"LINEAR_WEBHOOK_SECRET"`
+
+	// Jira (native OAuth integration — Atlassian OAuth 2.0 3LO)
+	JiraClientID      string `mapstructure:"JIRA_CLIENT_ID"`
+	JiraClientSecret  string `mapstructure:"JIRA_CLIENT_SECRET"`
+	JiraWebhookSecret string `mapstructure:"JIRA_WEBHOOK_SECRET"`
+
+	// Stripe billing
+	StripeSecretKey     string `mapstructure:"STRIPE_SECRET_KEY"`
+	StripeWebhookSecret string `mapstructure:"STRIPE_WEBHOOK_SECRET"`
+	StripePriceStarter  string `mapstructure:"STRIPE_PRICE_STARTER"`
+	StripePriceBuilder  string `mapstructure:"STRIPE_PRICE_BUILDER"`
+
+	// Observability
+	SentryDSN     string `mapstructure:"SENTRY_DSN"`
+	AppEnv        string `mapstructure:"APP_ENV"`
 }
 
 // Load reads configuration from environment variables (with optional .env file support
@@ -55,6 +89,7 @@ func Load() (*Config, error) {
 	v.SetDefault("FRONTEND_URL", "http://localhost:5173")
 	v.SetDefault("AWS_REGION", "us-east-1")
 	v.SetDefault("NANGO_SERVER_URL", "http://localhost:3003")
+	v.SetDefault("APP_ENV", "development")
 
 	// Bind all environment variables automatically. Viper upper-cases the key
 	// and checks the environment for a matching variable.
@@ -71,6 +106,8 @@ func Load() (*Config, error) {
 		"FRONTEND_URL",
 		"GITHUB_CLIENT_ID",
 		"GITHUB_CLIENT_SECRET",
+		"GOOGLE_CLIENT_ID",
+		"GOOGLE_CLIENT_SECRET",
 		"GITHUB_APP_ID",
 		"GITHUB_APP_PRIVATE_KEY_PATH",
 		"ANTHROPIC_API_KEY",
@@ -81,6 +118,24 @@ func Load() (*Config, error) {
 		"NANGO_SERVER_URL",
 		"NANGO_SECRET_KEY",
 		"NANGO_PUBLIC_KEY",
+		"INTERCOM_CLIENT_ID",
+		"INTERCOM_CLIENT_SECRET",
+		"INTERCOM_WEBHOOK_SECRET",
+		"SLACK_CLIENT_ID",
+		"SLACK_CLIENT_SECRET",
+		"SLACK_SIGNING_SECRET",
+		"LINEAR_CLIENT_ID",
+		"LINEAR_CLIENT_SECRET",
+		"LINEAR_WEBHOOK_SECRET",
+		"JIRA_CLIENT_ID",
+		"JIRA_CLIENT_SECRET",
+		"JIRA_WEBHOOK_SECRET",
+		"STRIPE_SECRET_KEY",
+		"STRIPE_WEBHOOK_SECRET",
+		"STRIPE_PRICE_STARTER",
+		"STRIPE_PRICE_BUILDER",
+		"SENTRY_DSN",
+		"APP_ENV",
 	}
 	for _, k := range keys {
 		if err := v.BindEnv(k); err != nil {

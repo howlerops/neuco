@@ -14,6 +14,7 @@ import (
 
 	"github.com/neuco-ai/neuco/internal/config"
 	"github.com/neuco-ai/neuco/internal/jobs"
+	"github.com/neuco-ai/neuco/internal/observability"
 	"github.com/neuco-ai/neuco/internal/store"
 )
 
@@ -23,6 +24,10 @@ func main() {
 		slog.Error("failed to load config", "error", err)
 		os.Exit(1)
 	}
+
+	observability.InitLogging("neuco-worker", cfg.AppEnv)
+	flushSentry := observability.InitSentry(cfg, "neuco-worker")
+	defer flushSentry()
 
 	pool, err := pgxpool.New(context.Background(), cfg.DatabaseURL)
 	if err != nil {
@@ -55,6 +60,20 @@ func main() {
 				river.PeriodicInterval(7*24*time.Hour), // weekly
 				func() (river.JobArgs, *river.InsertOpts) {
 					return jobs.DigestAllProjectsJobArgs{}, &river.InsertOpts{Queue: "synthesis"}
+				},
+				&river.PeriodicJobOpts{RunOnStart: false},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(6*time.Hour), // sync integrations every 6 hours
+				func() (river.JobArgs, *river.InsertOpts) {
+					return jobs.SyncAllIntegrationsJobArgs{}, &river.InsertOpts{Queue: "default"}
+				},
+				&river.PeriodicJobOpts{RunOnStart: false},
+			),
+			river.NewPeriodicJob(
+				river.PeriodicInterval(7*24*time.Hour), // weekly digest emails
+				func() (river.JobArgs, *river.InsertOpts) {
+					return jobs.DigestEmailsJobArgs{}, &river.InsertOpts{Queue: "default"}
 				},
 				&river.PeriodicJobOpts{RunOnStart: false},
 			),

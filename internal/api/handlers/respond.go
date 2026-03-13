@@ -1,8 +1,11 @@
 package handlers
 
 import (
+	"log/slog"
 	"net/http"
 
+	"github.com/getsentry/sentry-go"
+	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/render"
 )
 
@@ -18,6 +21,17 @@ func (e *errResponse) Render(w http.ResponseWriter, r *http.Request) error {
 }
 
 func respondErr(w http.ResponseWriter, r *http.Request, status int, msg string) {
+	if status >= 500 {
+		slog.ErrorContext(r.Context(), "server error",
+			slog.String("request_id", chiMiddleware.GetReqID(r.Context())),
+			slog.Int("status", status),
+			slog.String("error", msg),
+			slog.String("path", r.URL.Path),
+		)
+		if hub := sentry.GetHubFromContext(r.Context()); hub != nil {
+			hub.CaptureMessage(msg)
+		}
+	}
 	render.Render(w, r, &errResponse{HTTPStatusCode: status, Error: msg}) //nolint:errcheck
 }
 

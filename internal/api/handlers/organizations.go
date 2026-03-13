@@ -61,6 +61,14 @@ func CreateOrg(d *Deps) http.HandlerFunc {
 			respondErr(w, r, http.StatusBadRequest, "name is required")
 			return
 		}
+		if msg := validateStringLen("name", req.Name, MaxNameLen); msg != "" {
+			respondErr(w, r, http.StatusBadRequest, msg)
+			return
+		}
+		if msg := validateStringLen("slug", req.Slug, MaxSlugLen); msg != "" {
+			respondErr(w, r, http.StatusBadRequest, msg)
+			return
+		}
 
 		slug := req.Slug
 		if slug == "" {
@@ -115,6 +123,10 @@ func UpdateOrg(d *Deps) http.HandlerFunc {
 		var name *string
 		if req.Name != nil {
 			trimmed := strings.TrimSpace(*req.Name)
+			if msg := validateStringLen("name", trimmed, MaxNameLen); msg != "" {
+				respondErr(w, r, http.StatusBadRequest, msg)
+				return
+			}
 			name = &trimmed
 		}
 

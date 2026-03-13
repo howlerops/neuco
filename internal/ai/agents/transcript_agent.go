@@ -170,7 +170,7 @@ func (a *TranscriptAgent) Process(ctx context.Context, projectID uuid.UUID, tran
 			return state.signals, fmt.Errorf("transcript_agent: marshal messages: %w", err)
 		}
 
-		resp, err := a.llm.ChatWithTools(ctx, agentModel, systemPrompt, apiMessages, agentTools, 4096)
+		resp, _, err := a.llm.ChatWithTools(ctx, agentModel, systemPrompt, apiMessages, agentTools, 4096)
 		if err != nil {
 			return state.signals, fmt.Errorf("transcript_agent: iteration %d: %w", iter, err)
 		}

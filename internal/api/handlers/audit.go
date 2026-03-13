@@ -20,10 +20,11 @@ func AuditLog(d *Deps) http.HandlerFunc {
 
 		limit := 50
 		if lStr := r.URL.Query().Get("limit"); lStr != "" {
-			if n, err := strconv.Atoi(lStr); err == nil && n > 0 && n <= 500 {
+			if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
 				limit = n
 			}
 		}
+		limit = clampPagination(limit)
 
 		offset := 0
 		if oStr := r.URL.Query().Get("offset"); oStr != "" {

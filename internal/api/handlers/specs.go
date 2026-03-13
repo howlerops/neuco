@@ -112,6 +112,19 @@ func UpdateSpec(d *Deps) http.HandlerFunc {
 			return
 		}
 
+		// Validate string field lengths.
+		for _, check := range []struct{ field, val string; max int }{
+			{"problem_statement", ptrStr(req.ProblemStatement), MaxContentLen},
+			{"proposed_solution", ptrStr(req.ProposedSolution), MaxContentLen},
+			{"ui_changes", ptrStr(req.UIChanges), MaxContentLen},
+			{"data_model_changes", ptrStr(req.DataModelChanges), MaxContentLen},
+		} {
+			if msg := validateStringLen(check.field, check.val, check.max); msg != "" {
+				respondErr(w, r, http.StatusBadRequest, msg)
+				return
+			}
+		}
+
 		existing, err := d.Store.GetSpecByCandidate(r.Context(), projectID, candidateID)
 		if err != nil {
 			respondErr(w, r, http.StatusNotFound, "spec not found — generate one first")

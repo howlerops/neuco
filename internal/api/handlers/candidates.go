@@ -38,10 +38,11 @@ func ListCandidates(d *Deps) http.HandlerFunc {
 		limit := 50
 		offset := 0
 		if lStr := r.URL.Query().Get("limit"); lStr != "" {
-			if n, err := strconv.Atoi(lStr); err == nil && n > 0 && n <= 500 {
+			if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
 				limit = n
 			}
 		}
+		limit = clampPagination(limit)
 		if oStr := r.URL.Query().Get("offset"); oStr != "" {
 			if n, err := strconv.Atoi(oStr); err == nil && n >= 0 {
 				offset = n
@@ -107,6 +108,10 @@ func UpdateCandidateStatus(d *Deps) http.HandlerFunc {
 		var req updateCandidateStatusRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Status == "" {
 			respondErr(w, r, http.StatusBadRequest, "status is required")
+			return
+		}
+		if !isValidCandidateStatus(req.Status) {
+			respondErr(w, r, http.StatusBadRequest, "invalid status: must be new, specced, in_progress, reviewing, accepted, rejected, backlogged, or shipped")
 			return
 		}
 

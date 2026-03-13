@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/neuco-ai/neuco/internal/domain"
 	"github.com/neuco-ai/neuco/internal/jobs"
+	"github.com/neuco-ai/neuco/internal/store"
 	"github.com/riverqueue/river"
 )
 
@@ -95,6 +97,15 @@ func Webhook(d *Deps) http.HandlerFunc {
 		}
 
 		if err := insertSignalWithJob(r.Context(), d, signal); err != nil {
+			if errors.Is(err, store.ErrDuplicateSignal) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				json.NewEncoder(w).Encode(webhookResponse{ //nolint:errcheck
+					SignalID: signalID.String(),
+					Status:   "deduplicated",
+				})
+				return
+			}
 			http.Error(w, `{"error":"failed to process webhook"}`, http.StatusInternalServerError)
 			return
 		}

@@ -1,12 +1,14 @@
 package nango
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -28,38 +30,117 @@ func NewSyncService(nango *Client, store *store.Store) *SyncService {
 	return &SyncService{nango: nango, store: store}
 }
 
-// SyncGong fetches recent Gong call recordings via the Nango proxy and returns
-// them as call-transcript signals. The Gong Calls API is used:
-// GET /v2/calls — returns a page of calls.
+// SyncGong fetches recent Gong call recordings via the Nango proxy, retrieves
+// transcripts for each call, and returns them as call-transcript signals.
+//
+// Gong API endpoints used:
+//   - POST /v2/calls/extensive (list calls with participants, supports cursor pagination)
+//   - POST /v2/calls/transcript (fetch transcript for specific call IDs)
+//
+// When sinceTime is non-nil, only calls started after that time are fetched
+// (incremental sync). Otherwise all available calls are returned.
 func (s *SyncService) SyncGong(ctx context.Context, connectionID string, projectID uuid.UUID) ([]domain.Signal, error) {
+	return s.SyncGongSince(ctx, connectionID, projectID, nil)
+}
+
+// SyncGongSince is like SyncGong but accepts an optional sinceTime for
+// incremental sync. When sinceTime is non-nil, only calls started after that
+// timestamp are fetched.
+func (s *SyncService) SyncGongSince(ctx context.Context, connectionID string, projectID uuid.UUID, sinceTime *time.Time) ([]domain.Signal, error) {
 	const providerConfigKey = "gong"
 
-	resp, err := s.nango.Proxy(ctx, http.MethodGet, providerConfigKey, connectionID, "/v2/calls", nil)
-	if err != nil {
-		return nil, fmt.Errorf("nango.SyncGong: proxy request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
-		return nil, fmt.Errorf("nango.SyncGong: unexpected status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var result struct {
-		Calls []struct {
-			ID        string `json:"id"`
-			Title     string `json:"title"`
-			StartedAt string `json:"started"`
-			Duration  int    `json:"duration"`
-			URL       string `json:"url"`
-		} `json:"calls"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("nango.SyncGong: decode response: %w", err)
+	// Step 1: Fetch call list with pagination via POST /v2/calls/extensive.
+	type gongCall struct {
+		ID        string `json:"id"`
+		Title     string `json:"title"`
+		StartedAt string `json:"started"`
+		Duration  int    `json:"duration"`
+		URL       string `json:"url"`
+		Parties   []struct {
+			Name         string `json:"name"`
+			EmailAddress string `json:"emailAddress"`
+			SpeakerID    string `json:"speakerId"`
+		} `json:"parties"`
+		Topics []string `json:"topics"`
 	}
 
-	signals := make([]domain.Signal, 0, len(result.Calls))
-	for _, call := range result.Calls {
+	var allCalls []gongCall
+	var cursor string
+
+	for {
+		reqBody := map[string]any{
+			"contentSelector": map[string]any{
+				"exposedFields": map[string]any{
+					"parties": true,
+					"content": map[string]any{
+						"topics": true,
+					},
+				},
+			},
+		}
+		filter := map[string]any{}
+		if sinceTime != nil {
+			filter["fromDateTime"] = sinceTime.UTC().Format(time.RFC3339)
+		}
+		if cursor != "" {
+			filter["cursor"] = cursor
+		}
+		if len(filter) > 0 {
+			reqBody["filter"] = filter
+		}
+
+		bodyBytes, _ := json.Marshal(reqBody)
+		resp, err := s.nango.Proxy(ctx, http.MethodPost, providerConfigKey, connectionID,
+			"/v2/calls/extensive", bytes.NewReader(bodyBytes))
+		if err != nil {
+			return nil, fmt.Errorf("nango.SyncGong: list calls: %w", err)
+		}
+
+		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 2<<20)) // 2 MiB
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			return nil, fmt.Errorf("nango.SyncGong: list calls: status %d: %s", resp.StatusCode, string(respBody))
+		}
+
+		var page struct {
+			Calls  []gongCall `json:"calls"`
+			Records struct {
+				Cursor        string `json:"cursor"`
+				CurrentPageNr int    `json:"currentPageNumber"`
+				TotalRecords  int    `json:"totalRecords"`
+			} `json:"records"`
+		}
+		if err := json.Unmarshal(respBody, &page); err != nil {
+			return nil, fmt.Errorf("nango.SyncGong: decode calls page: %w", err)
+		}
+
+		allCalls = append(allCalls, page.Calls...)
+		cursor = page.Records.Cursor
+		if cursor == "" || len(page.Calls) == 0 {
+			break
+		}
+	}
+
+	if len(allCalls) == 0 {
+		slog.Info("nango.SyncGong: no calls found",
+			"connection_id", connectionID,
+			"project_id", projectID,
+		)
+		return nil, nil
+	}
+
+	// Step 2: Fetch transcripts in a single batch via POST /v2/calls/transcript.
+	callIDs := make([]string, len(allCalls))
+	for i, c := range allCalls {
+		callIDs[i] = c.ID
+	}
+
+	transcriptMap := s.fetchGongTranscripts(ctx, providerConfigKey, connectionID, callIDs)
+
+	// Step 3: Build signals combining call metadata + transcript.
+	signals := make([]domain.Signal, 0, len(allCalls))
+	for _, call := range allCalls {
 		occurredAt := time.Now().UTC()
 		if call.StartedAt != "" {
 			if t, err := time.Parse(time.RFC3339, call.StartedAt); err == nil {
@@ -67,15 +148,31 @@ func (s *SyncService) SyncGong(ctx context.Context, connectionID string, project
 			}
 		}
 
-		content := call.Title
+		// Build content from transcript if available, otherwise use title.
+		content := transcriptMap[call.ID]
+		if content == "" {
+			content = call.Title
+		}
 		if content == "" {
 			content = fmt.Sprintf("Gong call %s", call.ID)
 		}
 
+		// Extract speaker names.
+		speakers := make([]map[string]string, 0, len(call.Parties))
+		for _, p := range call.Parties {
+			speakers = append(speakers, map[string]string{
+				"name":  p.Name,
+				"email": p.EmailAddress,
+			})
+		}
+
 		meta, _ := json.Marshal(map[string]any{
 			"call_id":  call.ID,
+			"title":    call.Title,
 			"duration": call.Duration,
 			"url":      call.URL,
+			"speakers": speakers,
+			"topics":   call.Topics,
 			"provider": "gong",
 		})
 
@@ -98,6 +195,80 @@ func (s *SyncService) SyncGong(ctx context.Context, connectionID string, project
 	)
 
 	return signals, nil
+}
+
+// fetchGongTranscripts fetches transcripts for the given call IDs and returns
+// a map of callID → formatted transcript text. Failures are logged but do not
+// propagate; callers fall back to using the call title.
+func (s *SyncService) fetchGongTranscripts(
+	ctx context.Context,
+	providerConfigKey string,
+	connectionID string,
+	callIDs []string,
+) map[string]string {
+	result := make(map[string]string, len(callIDs))
+
+	reqBody, _ := json.Marshal(map[string]any{
+		"filter": map[string]any{
+			"callIds": callIDs,
+		},
+	})
+
+	resp, err := s.nango.Proxy(ctx, http.MethodPost, providerConfigKey, connectionID,
+		"/v2/calls/transcript", bytes.NewReader(reqBody))
+	if err != nil {
+		slog.Warn("nango.SyncGong: fetch transcripts failed", "error", err)
+		return result
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		slog.Warn("nango.SyncGong: fetch transcripts: unexpected status",
+			"status", resp.StatusCode,
+			"body", string(body),
+		)
+		return result
+	}
+
+	var transcriptResp struct {
+		CallTranscripts []struct {
+			CallID     string `json:"callId"`
+			Transcript []struct {
+				SpeakerID string `json:"speakerId"`
+				Topic     string `json:"topic"`
+				Sentences []struct {
+					Start    float64 `json:"start"`
+					End      float64 `json:"end"`
+					Text     string  `json:"text"`
+				} `json:"sentences"`
+			} `json:"transcript"`
+		} `json:"callTranscripts"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&transcriptResp); err != nil {
+		slog.Warn("nango.SyncGong: decode transcripts", "error", err)
+		return result
+	}
+
+	for _, ct := range transcriptResp.CallTranscripts {
+		var sb strings.Builder
+		for _, seg := range ct.Transcript {
+			if seg.Topic != "" {
+				sb.WriteString(fmt.Sprintf("[Topic: %s]\n", seg.Topic))
+			}
+			for _, sent := range seg.Sentences {
+				sb.WriteString(sent.Text)
+				sb.WriteString(" ")
+			}
+			sb.WriteString("\n")
+		}
+		text := strings.TrimSpace(sb.String())
+		if text != "" {
+			result[ct.CallID] = text
+		}
+	}
+
+	return result
 }
 
 // SyncIntercom fetches recent Intercom conversations via the Nango proxy and

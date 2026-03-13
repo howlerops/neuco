@@ -58,6 +58,12 @@ func NewSignalQueryEngine(llm *LLMClient, s SignalSearcher) *SignalQueryEngine {
 	return &SignalQueryEngine{llm: llm, store: s}
 }
 
+// GenerateEmbedding delegates to the underlying LLMClient to produce an
+// embedding vector for the given text.
+func (e *SignalQueryEngine) GenerateEmbedding(ctx context.Context, text string) ([]float32, error) {
+	return e.llm.GenerateEmbedding(ctx, text)
+}
+
 // Query embeds question, executes a vector similarity search, and returns the
 // top-N matching signals with their similarity scores.
 func (e *SignalQueryEngine) Query(

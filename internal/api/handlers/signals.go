@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strconv"
@@ -22,6 +23,7 @@ import (
 // signalUploadResponse is the response body for POST …/signals/upload.
 type signalUploadResponse struct {
 	Inserted      int    `json:"inserted"`
+	Deduplicated  int    `json:"deduplicated"`
 	PipelineRunID string `json:"pipeline_run_id,omitempty"`
 }
 
@@ -69,11 +71,15 @@ func UploadSignals(d *Deps) http.HandlerFunc {
 			return
 		}
 
-		// Insert signals and collect their IDs for the ingest job.
+		// Insert signals and collect their IDs, skipping exact duplicates.
 		var signalIDs []uuid.UUID
+		dedupCount := 0
 		for i := range signals {
 			sig, err := d.Store.InsertSignal(r.Context(), signals[i])
 			if err != nil {
+				if errors.Is(err, store.ErrDuplicateSignal) {
+					dedupCount++
+				}
 				continue
 			}
 			signalIDs = append(signalIDs, sig.ID)
@@ -101,7 +107,7 @@ func UploadSignals(d *Deps) http.HandlerFunc {
 		recordAudit(r.Context(), d, orgID, "signal.upload", "signal", projectID.String(),
 			map[string]any{"inserted": inserted, "filename": filename})
 
-		respondCreated(w, r, signalUploadResponse{Inserted: inserted, PipelineRunID: pipelineRunID})
+		respondCreated(w, r, signalUploadResponse{Inserted: inserted, Deduplicated: dedupCount, PipelineRunID: pipelineRunID})
 	}
 }
 
@@ -212,10 +218,11 @@ func ListSignals(d *Deps) http.HandlerFunc {
 		limit := 50
 		offset := 0
 		if lStr := r.URL.Query().Get("limit"); lStr != "" {
-			if n, err := strconv.Atoi(lStr); err == nil && n > 0 && n <= 500 {
+			if n, err := strconv.Atoi(lStr); err == nil && n > 0 {
 				limit = n
 			}
 		}
+		limit = clampPagination(limit)
 		if oStr := r.URL.Query().Get("offset"); oStr != "" {
 			if n, err := strconv.Atoi(oStr); err == nil && n >= 0 {
 				offset = n
@@ -238,6 +245,9 @@ func ListSignals(d *Deps) http.HandlerFunc {
 			if t, err := time.Parse(time.RFC3339, to); err == nil {
 				filters.To = &t
 			}
+		}
+		if r.URL.Query().Get("exclude_duplicates") == "true" {
+			filters.ExcludeDuplicates = true
 		}
 
 		page, err := d.Store.ListProjectSignals(r.Context(), projectID, filters, store.Page(limit, offset))
@@ -318,6 +328,10 @@ func QuerySignals(d *Deps) http.HandlerFunc {
 
 		if strings.TrimSpace(body.Question) == "" {
 			respondErr(w, r, http.StatusBadRequest, "question is required")
+			return
+		}
+		if msg := validateStringLen("question", body.Question, MaxDescriptionLen); msg != "" {
+			respondErr(w, r, http.StatusBadRequest, msg)
 			return
 		}
 

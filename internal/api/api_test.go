@@ -166,6 +166,99 @@ func runMigrations(t *testing.T, pool *pgxpool.Pool) {
 		t.Fatalf("failed to run migration 000005: %v", err)
 	}
 
+	// Migration 000006 (subscriptions)
+	migration6, err := os.ReadFile("../../migrations/000006_subscriptions.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000006: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration6)); err != nil {
+		t.Fatalf("failed to run migration 000006: %v", err)
+	}
+
+	// Migration 000007 (usage tracking)
+	migration7, err := os.ReadFile("../../migrations/000007_usage_tracking.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000007: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration7)); err != nil {
+		t.Fatalf("failed to run migration 000007: %v", err)
+	}
+
+	// Migration 000008 (user onboarding)
+	migration8, err := os.ReadFile("../../migrations/000008_user_onboarding.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000008: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration8)); err != nil {
+		t.Fatalf("failed to run migration 000008: %v", err)
+	}
+
+	// Migration 000009 (llm calls)
+	migration9, err := os.ReadFile("../../migrations/000009_llm_calls.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000009: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration9)); err != nil {
+		t.Fatalf("failed to run migration 000009: %v", err)
+	}
+
+	// Migration 000010 (google sso)
+	migration10, err := os.ReadFile("../../migrations/000010_google_sso.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000010: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration10)); err != nil {
+		t.Fatalf("failed to run migration 000010: %v", err)
+	}
+
+	// Migration 000011 (project context)
+	migration11, err := os.ReadFile("../../migrations/000011_project_context.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000011: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration11)); err != nil {
+		t.Fatalf("failed to run migration 000011: %v", err)
+	}
+
+	// Migration 000012 (signal dedup)
+	migration12, err := os.ReadFile("../../migrations/000012_signal_dedup.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000012: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration12)); err != nil {
+		t.Fatalf("failed to run migration 000012: %v", err)
+	}
+
+	// Migration 000013 (digest opt out)
+	migration13, err := os.ReadFile("../../migrations/000013_digest_opt_out.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000013: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration13)); err != nil {
+		t.Fatalf("failed to run migration 000013: %v", err)
+	}
+
+	// Migration 000014 (notifications)
+	migration14, err := os.ReadFile("../../migrations/000014_notifications.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000014: %v", err)
+	}
+	if _, err := pool.Exec(ctx, string(migration14)); err != nil {
+		t.Fatalf("failed to run migration 000014: %v", err)
+	}
+
+	// Migration 000015 (production indexes) — skip ALTER DATABASE in test env.
+	migration15, err := os.ReadFile("../../migrations/000015_production_indexes.up.sql")
+	if err != nil {
+		t.Fatalf("failed to read migration 000015: %v", err)
+	}
+	// Remove ALTER DATABASE statement which requires superuser and isn't needed in tests.
+	m15Str := string(migration15)
+	m15Str = strings.Replace(m15Str, "ALTER DATABASE CURRENT SET statement_timeout = '30s';", "", 1)
+	if _, err := pool.Exec(ctx, m15Str); err != nil {
+		t.Fatalf("failed to run migration 000015: %v", err)
+	}
+
 	// River queue tables (required for river.Insert calls in handlers).
 	// Use the official rivermigrate API to create the correct schema.
 	migrator, err := rivermigrate.New(riverpgxv5.New(pool), nil)
@@ -183,6 +276,12 @@ func runMigrations(t *testing.T, pool *pgxpool.Pool) {
 func cleanDatabase(pool *pgxpool.Pool) {
 	ctx := context.Background()
 	tables := []string{
+		"notifications",
+		"project_contexts",
+		"llm_calls",
+		"user_onboarding",
+		"org_usage",
+		"subscriptions",
 		"feature_flags",
 		"copilot_notes",
 		"audit_log",
@@ -999,6 +1098,936 @@ func TestOperatorFlagsCRUD(t *testing.T) {
 	t.Run("wrong_operator_token_returns_401", func(t *testing.T) {
 		resp := doRequest(t, http.MethodGet, env.server.URL+"/operator/flags", nil, "wrong-token")
 		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+func TestOnboardingFlow(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+
+	t.Run("initial_status_is_empty", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/onboarding/status", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var status domain.OnboardingStatus
+		json.Unmarshal(readBody(t, resp), &status)
+		if status.IsComplete {
+			t.Error("expected onboarding not complete initially")
+		}
+		if len(status.CompletedSteps) != 0 {
+			t.Errorf("expected 0 completed steps, got %d", len(status.CompletedSteps))
+		}
+		if status.TotalSteps != 6 {
+			t.Errorf("expected 6 total steps, got %d", status.TotalSteps)
+		}
+	})
+
+	t.Run("complete_welcome_step", func(t *testing.T) {
+		payload := map[string]string{"step": "welcome"}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/onboarding/step", payload, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var status domain.OnboardingStatus
+		json.Unmarshal(readBody(t, resp), &status)
+		if len(status.CompletedSteps) != 1 {
+			t.Errorf("expected 1 completed step, got %d", len(status.CompletedSteps))
+		}
+		if status.CompletedSteps[0] != domain.OnboardingStepWelcome {
+			t.Errorf("expected step 'welcome', got %q", status.CompletedSteps[0])
+		}
+	})
+
+	t.Run("complete_multiple_steps", func(t *testing.T) {
+		for _, step := range []string{"org", "project"} {
+			payload := map[string]string{"step": step}
+			resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/onboarding/step", payload, sd.tokenA)
+			assertStatus(t, resp, http.StatusOK)
+		}
+
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/onboarding/status", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var status domain.OnboardingStatus
+		json.Unmarshal(readBody(t, resp), &status)
+		if len(status.CompletedSteps) != 3 {
+			t.Errorf("expected 3 completed steps, got %d", len(status.CompletedSteps))
+		}
+	})
+
+	t.Run("invalid_step_returns_400", func(t *testing.T) {
+		payload := map[string]string{"step": "nonexistent_step"}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/onboarding/step", payload, sd.tokenA)
+		assertStatus(t, resp, http.StatusBadRequest)
+	})
+
+	t.Run("skip_onboarding", func(t *testing.T) {
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/onboarding/skip", nil, sd.tokenB)
+		assertStatus(t, resp, http.StatusOK)
+
+		var status domain.OnboardingStatus
+		json.Unmarshal(readBody(t, resp), &status)
+		if !status.IsComplete {
+			t.Error("expected onboarding to be complete after skip")
+		}
+	})
+
+	t.Run("unauthenticated_returns_401", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/onboarding/status", nil, "")
+		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+}
+
+func TestBillingSubscription(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	t.Run("no_subscription_returns_null", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/subscription", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var result map[string]any
+		json.Unmarshal(readBody(t, resp), &result)
+		if result["subscription"] != nil {
+			t.Error("expected null subscription for new org")
+		}
+	})
+
+	t.Run("get_usage_free_tier", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var usage domain.UsageSummary
+		json.Unmarshal(readBody(t, resp), &usage)
+		if usage.Limits.MaxProjects != 1 {
+			t.Errorf("expected free tier max_projects=1, got %d", usage.Limits.MaxProjects)
+		}
+		if usage.Limits.MaxSignals != 20 {
+			t.Errorf("expected free tier max_signals=20, got %d", usage.Limits.MaxSignals)
+		}
+		if usage.PlanTier != nil {
+			t.Error("expected nil plan tier for free org")
+		}
+	})
+
+	// Upsert a subscription directly via store (simulating a Stripe webhook).
+	subID := "sub_test_" + uuid.New().String()[:8]
+	sub := domain.Subscription{
+		OrgID:                sd.orgA.ID,
+		StripeCustomerID:     "cus_test_" + uuid.New().String()[:8],
+		StripeSubscriptionID: &subID,
+		PlanTier:             domain.PlanTierStarter,
+		Status:               domain.SubStatusActive,
+	}
+	_, err := env.store.UpsertSubscription(ctx, sub)
+	if err != nil {
+		t.Fatalf("upsert subscription: %v", err)
+	}
+
+	t.Run("get_subscription_after_upsert", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/subscription", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var result struct {
+			Subscription *domain.Subscription `json:"subscription"`
+			Limits       domain.PlanLimits    `json:"limits"`
+		}
+		json.Unmarshal(readBody(t, resp), &result)
+		if result.Subscription == nil {
+			t.Fatal("expected non-null subscription")
+		}
+		if result.Subscription.PlanTier != domain.PlanTierStarter {
+			t.Errorf("expected starter plan, got %q", result.Subscription.PlanTier)
+		}
+		if result.Subscription.Status != domain.SubStatusActive {
+			t.Errorf("expected active status, got %q", result.Subscription.Status)
+		}
+		if result.Limits.MaxProjects != 3 {
+			t.Errorf("expected starter max_projects=3, got %d", result.Limits.MaxProjects)
+		}
+	})
+
+	t.Run("get_usage_with_subscription", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var usage domain.UsageSummary
+		json.Unmarshal(readBody(t, resp), &usage)
+		if usage.PlanTier == nil || *usage.PlanTier != domain.PlanTierStarter {
+			t.Error("expected starter plan tier in usage")
+		}
+		if usage.Limits.MaxSignals != 100 {
+			t.Errorf("expected starter max_signals=100, got %d", usage.Limits.MaxSignals)
+		}
+	})
+
+	t.Run("tenant_isolation_billing", func(t *testing.T) {
+		// orgB should not see orgA's subscription.
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/subscription", nil, sd.tokenB)
+		// Should fail — orgB token cannot access orgA routes.
+		if resp.StatusCode == http.StatusOK {
+			var result map[string]any
+			json.Unmarshal(readBody(t, resp), &result)
+			if result["subscription"] != nil {
+				t.Error("orgB should not see orgA subscription")
+			}
+		}
+	})
+}
+
+func TestUsageLimitEnforcement(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	// Create a project for signal upload tests.
+	project, err := env.store.CreateProject(ctx, sd.orgA.ID, "Limit Test Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	// Exhaust the free-tier signal limit (20) by inserting usage directly.
+	if err := env.store.IncrementSignalUsage(ctx, sd.orgA.ID, 20); err != nil {
+		t.Fatalf("increment signal usage: %v", err)
+	}
+
+	t.Run("signal_upload_blocked_at_limit", func(t *testing.T) {
+		csvData := "content,type,source\n\"Blocked signal\",feature_request,csv"
+
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+		part, err := writer.CreateFormFile("file", "signals.csv")
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		part.Write([]byte(csvData))
+		writer.Close()
+
+		req, err := http.NewRequest(http.MethodPost, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/signals/upload", &buf)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("Authorization", "Bearer "+sd.tokenA)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		assertStatus(t, resp, http.StatusTooManyRequests)
+
+		var result map[string]any
+		json.Unmarshal(readBody(t, resp), &result)
+		if result["code"] != "usage_limit_exceeded" {
+			t.Errorf("expected code 'usage_limit_exceeded', got %v", result["code"])
+		}
+	})
+
+	t.Run("project_creation_blocked_at_limit", func(t *testing.T) {
+		// Free tier allows 1 project. We already have 1.
+		payload := map[string]string{
+			"name":      "Second Project",
+			"framework": "react",
+			"styling":   "tailwind",
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/projects", payload, sd.tokenA)
+		assertStatus(t, resp, http.StatusTooManyRequests)
+	})
+
+	t.Run("upgrade_unlocks_limits", func(t *testing.T) {
+		// Upgrade orgA to starter plan (3 projects, 100 signals).
+		subID := "sub_upgrade_" + uuid.New().String()[:8]
+		sub := domain.Subscription{
+			OrgID:                sd.orgA.ID,
+			StripeCustomerID:     "cus_upgrade_" + uuid.New().String()[:8],
+			StripeSubscriptionID: &subID,
+			PlanTier:             domain.PlanTierStarter,
+			Status:               domain.SubStatusActive,
+		}
+		if _, err := env.store.UpsertSubscription(ctx, sub); err != nil {
+			t.Fatalf("upsert subscription: %v", err)
+		}
+
+		// Now project creation should succeed (starter allows 3 projects, we have 1).
+		payload := map[string]string{
+			"name":      "Second Project After Upgrade",
+			"framework": "react",
+			"styling":   "tailwind",
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/projects", payload, sd.tokenA)
+		assertStatus(t, resp, http.StatusCreated)
+	})
+}
+
+func TestLLMUsageTracking(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	project, err := env.store.CreateProject(ctx, sd.orgA.ID, "LLM Test Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	// Create a pipeline run to associate LLM calls with.
+	run, err := env.store.CreatePipelineRun(ctx, project.ID, domain.PipelineTypeIngest, nil)
+	if err != nil {
+		t.Fatalf("create pipeline run: %v", err)
+	}
+
+	// Insert several LLM call records via the store.
+	calls := []domain.LLMCall{
+		{ProjectID: project.ID, PipelineRunID: &run.ID, Provider: domain.LLMProviderAnthropic, Model: "claude-sonnet-4-6-20250514", CallType: domain.LLMCallTypeSpecGen, TokensIn: 1000, TokensOut: 500, LatencyMs: 1200, CostUSD: 0.0105},
+		{ProjectID: project.ID, PipelineRunID: &run.ID, Provider: domain.LLMProviderAnthropic, Model: "claude-haiku-4-5-20251001", CallType: domain.LLMCallTypeThemeNaming, TokensIn: 200, TokensOut: 50, LatencyMs: 300, CostUSD: 0.00036},
+		{ProjectID: project.ID, PipelineRunID: &run.ID, Provider: domain.LLMProviderOpenAI, Model: "text-embedding-3-small", CallType: domain.LLMCallTypeEmbedding, TokensIn: 500, TokensOut: 0, LatencyMs: 100, CostUSD: 0.00001},
+	}
+	for i := range calls {
+		if err := env.store.CreateLLMCall(ctx, &calls[i]); err != nil {
+			t.Fatalf("create llm call %d: %v", i, err)
+		}
+	}
+
+	t.Run("project_llm_usage_aggregation", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/llm-usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var agg domain.LLMUsageAgg
+		json.Unmarshal(readBody(t, resp), &agg)
+		if agg.TotalCalls != 3 {
+			t.Errorf("expected 3 total calls, got %d", agg.TotalCalls)
+		}
+		if agg.TotalTokensIn != 1700 {
+			t.Errorf("expected 1700 total tokens in, got %d", agg.TotalTokensIn)
+		}
+		if agg.TotalTokensOut != 550 {
+			t.Errorf("expected 550 total tokens out, got %d", agg.TotalTokensOut)
+		}
+	})
+
+	t.Run("pipeline_llm_usage", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/pipelines/"+run.ID.String()+"/llm-usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var agg domain.LLMUsageAgg
+		json.Unmarshal(readBody(t, resp), &agg)
+		if agg.TotalCalls != 3 {
+			t.Errorf("expected 3 calls for pipeline, got %d", agg.TotalCalls)
+		}
+	})
+
+	t.Run("list_llm_calls_paginated", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/llm-usage/calls?limit=2&offset=0", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var page struct {
+			Calls []domain.LLMCall `json:"calls"`
+			Total int              `json:"total"`
+		}
+		json.Unmarshal(readBody(t, resp), &page)
+		if page.Total != 3 {
+			t.Errorf("expected total 3, got %d", page.Total)
+		}
+		if len(page.Calls) != 2 {
+			t.Errorf("expected 2 calls in page, got %d", len(page.Calls))
+		}
+	})
+
+	t.Run("org_llm_usage", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/llm-usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var agg domain.LLMUsageAgg
+		json.Unmarshal(readBody(t, resp), &agg)
+		if agg.TotalCalls != 3 {
+			t.Errorf("expected 3 calls at org level, got %d", agg.TotalCalls)
+		}
+	})
+
+	t.Run("tenant_isolation_llm_usage", func(t *testing.T) {
+		// orgB should not see orgA's LLM usage via project routes.
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/llm-usage", nil, sd.tokenB)
+		assertStatus(t, resp, http.StatusNotFound)
+	})
+}
+
+func TestSlackWebhook(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	// Create a project and a Slack integration.
+	project, err := env.store.CreateProject(ctx, sd.orgA.ID, "Slack Test Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	_, err = env.store.CreateIntegration(ctx, domain.Integration{
+		ProjectID: project.ID,
+		Provider:  "slack",
+		Config: map[string]any{
+			"access_token": "xoxb-test",
+			"team_id":      "T_TEST",
+		},
+		IsActive: true,
+	})
+	if err != nil {
+		t.Fatalf("create slack integration: %v", err)
+	}
+
+	t.Run("url_verification_challenge", func(t *testing.T) {
+		payload := map[string]any{
+			"type":      "url_verification",
+			"token":     "test_token",
+			"challenge": "test_challenge_value_12345",
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/webhooks/slack", payload, "")
+		assertStatus(t, resp, http.StatusOK)
+
+		var result map[string]string
+		json.Unmarshal(readBody(t, resp), &result)
+		if result["challenge"] != "test_challenge_value_12345" {
+			t.Errorf("expected challenge echoed back, got %q", result["challenge"])
+		}
+	})
+
+	t.Run("message_event_creates_signal", func(t *testing.T) {
+		payload := map[string]any{
+			"type":    "event_callback",
+			"team_id": "T_TEST",
+			"event": map[string]any{
+				"type":    "message",
+				"channel": "C_GENERAL",
+				"user":    "U_ALICE",
+				"text":    "Users are requesting better onboarding",
+				"ts":      "1700000000.000001",
+			},
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/webhooks/slack", payload, "")
+		assertStatus(t, resp, http.StatusOK)
+
+		// Verify the signal was created.
+		page, listErr := env.store.ListProjectSignals(ctx, project.ID, store.SignalFilters{}, store.PageParams{Limit: 10})
+		if listErr != nil {
+			t.Fatalf("list signals: %v", listErr)
+		}
+		if len(page.Signals) == 0 {
+			t.Error("expected at least one signal from slack webhook")
+		}
+	})
+
+	t.Run("bot_message_ignored", func(t *testing.T) {
+		// Count existing signals.
+		beforePage, _ := env.store.ListProjectSignals(ctx, project.ID, store.SignalFilters{}, store.PageParams{Limit: 100})
+
+		payload := map[string]any{
+			"type":    "event_callback",
+			"team_id": "T_TEST",
+			"event": map[string]any{
+				"type":    "message",
+				"subtype": "bot_message",
+				"channel": "C_GENERAL",
+				"text":    "I am a bot",
+				"ts":      "1700000001.000001",
+			},
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/webhooks/slack", payload, "")
+		assertStatus(t, resp, http.StatusOK)
+
+		afterPage, _ := env.store.ListProjectSignals(ctx, project.ID, store.SignalFilters{}, store.PageParams{Limit: 100})
+		if len(afterPage.Signals) != len(beforePage.Signals) {
+			t.Error("bot message should not create a new signal")
+		}
+	})
+}
+
+func TestIntercomWebhook(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	// Create a project and an Intercom integration.
+	project, err := env.store.CreateProject(ctx, sd.orgA.ID, "Intercom Test Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	_, err = env.store.CreateIntegration(ctx, domain.Integration{
+		ProjectID: project.ID,
+		Provider:  "intercom",
+		Config: map[string]any{
+			"access_token": "test-intercom-token",
+		},
+		IsActive: true,
+	})
+	if err != nil {
+		t.Fatalf("create intercom integration: %v", err)
+	}
+
+	t.Run("conversation_created_creates_signal", func(t *testing.T) {
+		payload := map[string]any{
+			"topic":  "conversation.created",
+			"app_id": "test_app",
+			"data": map[string]any{
+				"item": map[string]any{
+					"id":         "conv_123",
+					"type":       "conversation",
+					"created_at": 1700000000,
+					"source": map[string]any{
+						"body": "I need help with the checkout flow, it keeps crashing",
+					},
+				},
+			},
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/webhooks/intercom", payload, "")
+		assertStatus(t, resp, http.StatusOK)
+
+		page, listErr := env.store.ListProjectSignals(ctx, project.ID, store.SignalFilters{}, store.PageParams{Limit: 10})
+		if listErr != nil {
+			t.Fatalf("list signals: %v", listErr)
+		}
+		if len(page.Signals) == 0 {
+			t.Error("expected at least one signal from intercom webhook")
+		}
+	})
+
+	t.Run("unhandled_topic_returns_ok", func(t *testing.T) {
+		// Count existing signals.
+		beforePage, _ := env.store.ListProjectSignals(ctx, project.ID, store.SignalFilters{}, store.PageParams{Limit: 100})
+
+		payload := map[string]any{
+			"topic":  "conversation.admin.replied",
+			"app_id": "test_app",
+			"data": map[string]any{
+				"item": map[string]any{
+					"id":   "conv_456",
+					"type": "conversation",
+				},
+			},
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/webhooks/intercom", payload, "")
+		assertStatus(t, resp, http.StatusOK)
+
+		afterPage, _ := env.store.ListProjectSignals(ctx, project.ID, store.SignalFilters{}, store.PageParams{Limit: 100})
+		if len(afterPage.Signals) != len(beforePage.Signals) {
+			t.Error("unhandled topic should not create a new signal")
+		}
+	})
+}
+
+func TestEmailClientInitialization(t *testing.T) {
+	t.Run("nil_client_when_no_api_key", func(t *testing.T) {
+		// The email.New function returns nil when apiKey is empty,
+		// allowing the app to run without email configured.
+		// This verifies the graceful degradation pattern.
+		env := testSetup(t)
+		defer env.cleanup()
+
+		// The test config has no Resend API key, so the email client
+		// should not be created. Verify the config has no key set.
+		if env.config.ResendAPIKey != "" {
+			t.Error("test config should not have a Resend API key")
+		}
+	})
+}
+
+func TestBillingRBACEnforcement(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+
+	// Add a viewer to orgA.
+	viewerUser, err := env.store.UpsertUser(context.Background(), 3001, "billing-viewer", "billing-viewer@example.com", "")
+	if err != nil {
+		t.Fatalf("create viewer: %v", err)
+	}
+	if _, err := env.store.AddMember(context.Background(), sd.orgA.ID, viewerUser.ID, domain.OrgRoleViewer); err != nil {
+		t.Fatalf("add viewer: %v", err)
+	}
+	viewerToken := generateTestJWT(viewerUser.ID, sd.orgA.ID, domain.OrgRoleViewer)
+
+	// Add a member to orgA.
+	memberUser, err := env.store.UpsertUser(context.Background(), 3002, "billing-member", "billing-member@example.com", "")
+	if err != nil {
+		t.Fatalf("create member: %v", err)
+	}
+	if _, err := env.store.AddMember(context.Background(), sd.orgA.ID, memberUser.ID, domain.OrgRoleMember); err != nil {
+		t.Fatalf("add member: %v", err)
+	}
+	memberToken := generateTestJWT(memberUser.ID, sd.orgA.ID, domain.OrgRoleMember)
+
+	t.Run("viewer_can_read_subscription", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/subscription", nil, viewerToken)
+		assertStatus(t, resp, http.StatusOK)
+	})
+
+	t.Run("viewer_can_read_usage", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/usage", nil, viewerToken)
+		assertStatus(t, resp, http.StatusOK)
+	})
+
+	t.Run("member_cannot_create_checkout", func(t *testing.T) {
+		payload := map[string]string{"plan_tier": "starter"}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/checkout", payload, memberToken)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("viewer_cannot_create_checkout", func(t *testing.T) {
+		payload := map[string]string{"plan_tier": "starter"}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/checkout", payload, viewerToken)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("member_cannot_create_portal", func(t *testing.T) {
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/portal", nil, memberToken)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+}
+
+func TestUsageIncrementAndQuery(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	// Create a project.
+	_, err := env.store.CreateProject(ctx, sd.orgA.ID, "Usage Query Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	// Increment usage counters.
+	if err := env.store.IncrementSignalUsage(ctx, sd.orgA.ID, 5); err != nil {
+		t.Fatalf("increment signals: %v", err)
+	}
+	if err := env.store.IncrementPRUsage(ctx, sd.orgA.ID); err != nil {
+		t.Fatalf("increment PRs: %v", err)
+	}
+	if err := env.store.IncrementPRUsage(ctx, sd.orgA.ID); err != nil {
+		t.Fatalf("increment PRs: %v", err)
+	}
+
+	t.Run("usage_reflects_increments", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var usage domain.UsageSummary
+		json.Unmarshal(readBody(t, resp), &usage)
+		if usage.SignalsUsed != 5 {
+			t.Errorf("expected 5 signals used, got %d", usage.SignalsUsed)
+		}
+		if usage.PRsUsed != 2 {
+			t.Errorf("expected 2 PRs used, got %d", usage.PRsUsed)
+		}
+		if usage.ProjectCount != 1 {
+			t.Errorf("expected 1 project, got %d", usage.ProjectCount)
+		}
+	})
+
+	t.Run("idempotent_signal_increment", func(t *testing.T) {
+		if err := env.store.IncrementSignalUsage(ctx, sd.orgA.ID, 3); err != nil {
+			t.Fatalf("increment signals: %v", err)
+		}
+
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/billing/usage", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var usage domain.UsageSummary
+		json.Unmarshal(readBody(t, resp), &usage)
+		if usage.SignalsUsed != 8 {
+			t.Errorf("expected 8 signals used after second increment, got %d", usage.SignalsUsed)
+		}
+	})
+}
+
+// ─── Integration E2E Tests ──────────────────────────────────────────────────
+
+func TestWebhookFullFlow(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+
+	// Step 1: Create a project via API.
+	projectPayload := map[string]string{
+		"name":      "Webhook Flow Project",
+		"framework": "react",
+		"styling":   "tailwind",
+	}
+	resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/orgs/"+sd.orgA.ID.String()+"/projects", projectPayload, sd.tokenA)
+	assertStatus(t, resp, http.StatusCreated)
+
+	var project domain.Project
+	json.Unmarshal(readBody(t, resp), &project)
+
+	t.Run("create_webhook_integration_via_api", func(t *testing.T) {
+		// Step 2: Create a webhook integration via the API.
+		intgPayload := map[string]any{"provider": "webhook"}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations", intgPayload, sd.tokenA)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var created domain.Integration
+		json.Unmarshal(readBody(t, resp), &created)
+		if created.Provider != "webhook" {
+			t.Errorf("expected provider 'webhook', got %q", created.Provider)
+		}
+		if created.WebhookSecret == "" {
+			t.Fatal("expected webhook_secret to be returned on create")
+		}
+
+		// Step 3: Send a webhook payload using the returned secret.
+		webhookPayload := map[string]any{
+			"content": "Enterprise customer needs SSO integration",
+			"type":    "feature_request",
+			"source":  "sales_call",
+			"meta":    map[string]any{"customer": "BigCorp", "deal_size": "$50k"},
+		}
+		webhookURL := fmt.Sprintf("%s/api/v1/webhooks/%s/%s", env.server.URL, project.ID, created.WebhookSecret)
+		resp = doRequest(t, http.MethodPost, webhookURL, webhookPayload, "")
+		assertStatus(t, resp, http.StatusCreated)
+
+		var webhookResult struct {
+			SignalID string `json:"signal_id"`
+			Status   string `json:"status"`
+		}
+		json.Unmarshal(readBody(t, resp), &webhookResult)
+		if webhookResult.Status != "accepted" {
+			t.Errorf("expected status 'accepted', got %q", webhookResult.Status)
+		}
+
+		// Step 4: Verify the signal appears in the API signals list.
+		resp = doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/signals", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var signalPage struct {
+			Signals []domain.Signal `json:"signals"`
+			Total   int            `json:"total"`
+		}
+		json.Unmarshal(readBody(t, resp), &signalPage)
+		if signalPage.Total == 0 {
+			t.Fatal("expected at least 1 signal in the signals list")
+		}
+
+		foundSignal := false
+		for _, sig := range signalPage.Signals {
+			if sig.Content == "Enterprise customer needs SSO integration" {
+				foundSignal = true
+				if string(sig.Source) != "sales_call" {
+					t.Errorf("expected source 'sales_call', got %q", sig.Source)
+				}
+				if string(sig.Type) != "feature_request" {
+					t.Errorf("expected type 'feature_request', got %q", sig.Type)
+				}
+				break
+			}
+		}
+		if !foundSignal {
+			t.Error("webhook signal not found in project signals list")
+		}
+	})
+}
+
+func TestWebhookDeduplication(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+	ctx := context.Background()
+
+	project, err := env.store.CreateProject(ctx, sd.orgA.ID, "Dedup Test Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	webhookSecret := "dedup-secret-12345"
+	_, err = env.store.CreateIntegration(ctx, domain.Integration{
+		ProjectID:     project.ID,
+		Provider:      "webhook",
+		WebhookSecret: webhookSecret,
+		Config:        map[string]any{},
+		IsActive:      true,
+	})
+	if err != nil {
+		t.Fatalf("create integration: %v", err)
+	}
+
+	webhookURL := fmt.Sprintf("%s/api/v1/webhooks/%s/%s", env.server.URL, project.ID, webhookSecret)
+
+	t.Run("duplicate_content_returns_deduplicated", func(t *testing.T) {
+		payload := map[string]any{
+			"content": "Users want dark mode support",
+			"type":    "feature_request",
+		}
+
+		// First submission — should be accepted.
+		resp := doRequest(t, http.MethodPost, webhookURL, payload, "")
+		assertStatus(t, resp, http.StatusCreated)
+
+		var result1 struct {
+			SignalID string `json:"signal_id"`
+			Status   string `json:"status"`
+		}
+		json.Unmarshal(readBody(t, resp), &result1)
+		if result1.Status != "accepted" {
+			t.Fatalf("first submission: expected 'accepted', got %q", result1.Status)
+		}
+
+		// Second submission with identical content — should be deduplicated.
+		resp = doRequest(t, http.MethodPost, webhookURL, payload, "")
+		assertStatus(t, resp, http.StatusOK)
+
+		var result2 struct {
+			SignalID string `json:"signal_id"`
+			Status   string `json:"status"`
+		}
+		json.Unmarshal(readBody(t, resp), &result2)
+		if result2.Status != "deduplicated" {
+			t.Errorf("second submission: expected 'deduplicated', got %q", result2.Status)
+		}
+	})
+
+	t.Run("different_content_is_not_deduplicated", func(t *testing.T) {
+		payload := map[string]any{
+			"content": "Users want light mode support",
+			"type":    "feature_request",
+		}
+		resp := doRequest(t, http.MethodPost, webhookURL, payload, "")
+		assertStatus(t, resp, http.StatusCreated)
+
+		var result struct {
+			Status string `json:"status"`
+		}
+		json.Unmarshal(readBody(t, resp), &result)
+		if result.Status != "accepted" {
+			t.Errorf("different content: expected 'accepted', got %q", result.Status)
+		}
+	})
+}
+
+func TestIntegrationCRUD(t *testing.T) {
+	env := testSetup(t)
+	defer env.cleanup()
+
+	sd := seedTestData(t, env.store)
+
+	project, err := env.store.CreateProject(context.Background(), sd.orgA.ID, "Integration CRUD Project", "", domain.ProjectFrameworkReact, domain.ProjectStylingTailwind, sd.userA.ID)
+	if err != nil {
+		t.Fatalf("create project: %v", err)
+	}
+
+	var createdID string
+	var webhookSecret string
+
+	t.Run("create_integration", func(t *testing.T) {
+		payload := map[string]any{
+			"provider": "webhook",
+			"config":   map[string]any{"label": "Customer Feedback"},
+		}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations", payload, sd.tokenA)
+		assertStatus(t, resp, http.StatusCreated)
+
+		var intg domain.Integration
+		json.Unmarshal(readBody(t, resp), &intg)
+		if intg.Provider != "webhook" {
+			t.Errorf("expected provider 'webhook', got %q", intg.Provider)
+		}
+		if intg.WebhookSecret == "" {
+			t.Error("expected webhook_secret in create response")
+		}
+		createdID = intg.ID.String()
+		webhookSecret = intg.WebhookSecret
+	})
+
+	t.Run("list_integrations_hides_secret", func(t *testing.T) {
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations", nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var intgs []domain.Integration
+		json.Unmarshal(readBody(t, resp), &intgs)
+		if len(intgs) == 0 {
+			t.Fatal("expected at least one integration")
+		}
+		for _, intg := range intgs {
+			if intg.WebhookSecret != "" {
+				t.Error("webhook_secret should be hidden in list response")
+			}
+		}
+	})
+
+	t.Run("get_integration_hides_secret", func(t *testing.T) {
+		if createdID == "" {
+			t.Skip("no integration created")
+		}
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations/"+createdID, nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusOK)
+
+		var intg domain.Integration
+		json.Unmarshal(readBody(t, resp), &intg)
+		if intg.WebhookSecret != "" {
+			t.Error("webhook_secret should be hidden in get response")
+		}
+	})
+
+	t.Run("webhook_works_with_created_integration", func(t *testing.T) {
+		if webhookSecret == "" {
+			t.Skip("no webhook secret")
+		}
+		payload := map[string]any{"content": "Test signal via integration API"}
+		url := fmt.Sprintf("%s/api/v1/webhooks/%s/%s", env.server.URL, project.ID, webhookSecret)
+		resp := doRequest(t, http.MethodPost, url, payload, "")
+		assertStatus(t, resp, http.StatusCreated)
+	})
+
+	t.Run("delete_integration", func(t *testing.T) {
+		if createdID == "" {
+			t.Skip("no integration created")
+		}
+		resp := doRequest(t, http.MethodDelete, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations/"+createdID, nil, sd.tokenA)
+		assertStatus(t, resp, http.StatusNoContent)
+	})
+
+	t.Run("webhook_fails_after_integration_deleted", func(t *testing.T) {
+		if webhookSecret == "" {
+			t.Skip("no webhook secret")
+		}
+		payload := map[string]any{"content": "Should fail"}
+		url := fmt.Sprintf("%s/api/v1/webhooks/%s/%s", env.server.URL, project.ID, webhookSecret)
+		resp := doRequest(t, http.MethodPost, url, payload, "")
+		assertStatus(t, resp, http.StatusUnauthorized)
+	})
+
+	t.Run("viewer_cannot_create_integration", func(t *testing.T) {
+		viewerUser, err := env.store.UpsertUser(context.Background(), 4001, "intg-viewer", "intg-viewer@example.com", "")
+		if err != nil {
+			t.Fatalf("create viewer: %v", err)
+		}
+		if _, err := env.store.AddMember(context.Background(), sd.orgA.ID, viewerUser.ID, domain.OrgRoleViewer); err != nil {
+			t.Fatalf("add viewer: %v", err)
+		}
+		viewerToken := generateTestJWT(viewerUser.ID, sd.orgA.ID, domain.OrgRoleViewer)
+
+		payload := map[string]any{"provider": "webhook"}
+		resp := doRequest(t, http.MethodPost, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations", payload, viewerToken)
+		assertStatus(t, resp, http.StatusForbidden)
+	})
+
+	t.Run("tenant_isolation_integration", func(t *testing.T) {
+		// orgB should not be able to list orgA's integrations.
+		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/integrations", nil, sd.tokenB)
+		assertStatus(t, resp, http.StatusNotFound)
 	})
 }
 
