@@ -11,6 +11,7 @@
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Separator } from '$lib/components/ui/separator';
 	import { toast } from '$lib/components/ui/sonner';
+	import { trackSpecGenerated } from '$lib/analytics';
 	import {
 		Sparkles,
 		AlertCircle,
@@ -171,6 +172,7 @@
 	function handleGenerate() {
 		generateMutation.mutate(undefined, {
 			onSuccess: () => {
+				trackSpecGenerated(projectId, candidateId);
 				toast.success('Spec generated successfully');
 			},
 			onError: (err) => {

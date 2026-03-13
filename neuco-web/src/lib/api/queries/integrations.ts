@@ -97,6 +97,158 @@ export function useCreateIntegration(projectId: string) {
 	}));
 }
 
+// ─── Native Intercom ──────────────────────────────────────────────────────────
+
+export interface IntercomAuthorizeResponse {
+	authorize_url: string;
+	state: string;
+}
+
+export function useIntercomAuthorize(projectId: string) {
+	return createQuery<IntercomAuthorizeResponse>(() => ({
+		queryKey: [...integrationKeys.all(projectId), 'intercom-authorize'] as const,
+		queryFn: () =>
+			apiClient.get<IntercomAuthorizeResponse>(
+				`/api/v1/projects/${projectId}/intercom/authorize`
+			),
+		enabled: false // Only fetch on demand
+	}));
+}
+
+export function useIntercomCallback(projectId: string) {
+	const queryClient = useQueryClient();
+
+	return createMutation<IntegrationRecord, Error, { code: string; state: string }>(() => ({
+		mutationFn: (payload) =>
+			apiClient.post<IntegrationRecord>(
+				`/api/v1/projects/${projectId}/intercom/callback`,
+				payload
+			),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: integrationKeys.lists(projectId) });
+		}
+	}));
+}
+
+export function useIntercomDisconnect(projectId: string) {
+	const queryClient = useQueryClient();
+
+	return createMutation<void, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.delete<void>(
+				`/api/v1/projects/${projectId}/intercom/${integrationId}`
+			),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: integrationKeys.lists(projectId) });
+		}
+	}));
+}
+
+export function useIntercomSync(projectId: string) {
+	return createMutation<{ run_id: string; status: string }, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.post<{ run_id: string; status: string }>(
+				`/api/v1/projects/${projectId}/intercom/${integrationId}/sync`,
+				{}
+			)
+	}));
+}
+
+// ─── Native Slack ────────────────────────────────────────────────────────────
+
+export interface SlackAuthorizeResponse {
+	authorize_url: string;
+	state: string;
+}
+
+export function useSlackDisconnect(projectId: string) {
+	const queryClient = useQueryClient();
+
+	return createMutation<void, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.delete<void>(
+				`/api/v1/projects/${projectId}/slack/${integrationId}`
+			),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: integrationKeys.lists(projectId) });
+		}
+	}));
+}
+
+export function useSlackSync(projectId: string) {
+	return createMutation<{ run_id: string; status: string }, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.post<{ run_id: string; status: string }>(
+				`/api/v1/projects/${projectId}/slack/${integrationId}/sync`,
+				{}
+			)
+	}));
+}
+
+// ─── Native Jira ──────────────────────────────────────────────────────────────
+
+export interface JiraAuthorizeResponse {
+	authorize_url: string;
+	state: string;
+}
+
+export function useJiraDisconnect(projectId: string) {
+	const queryClient = useQueryClient();
+
+	return createMutation<void, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.delete<void>(
+				`/api/v1/projects/${projectId}/jira/${integrationId}`
+			),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: integrationKeys.lists(projectId) });
+		}
+	}));
+}
+
+export function useJiraSync(projectId: string) {
+	return createMutation<{ run_id: string; status: string }, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.post<{ run_id: string; status: string }>(
+				`/api/v1/projects/${projectId}/jira/${integrationId}/sync`,
+				{}
+			)
+	}));
+}
+
+// ─── Native Linear ────────────────────────────────────────────────────────────
+
+export interface LinearAuthorizeResponse {
+	authorize_url: string;
+	state: string;
+}
+
+export function useLinearDisconnect(projectId: string) {
+	const queryClient = useQueryClient();
+
+	return createMutation<void, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.delete<void>(
+				`/api/v1/projects/${projectId}/linear/${integrationId}`
+			),
+		onSuccess: () => {
+			queryClient.invalidateQueries({ queryKey: integrationKeys.lists(projectId) });
+		}
+	}));
+}
+
+export function useLinearSync(projectId: string) {
+	return createMutation<{ run_id: string; status: string }, Error, string>(() => ({
+		mutationFn: (integrationId: string) =>
+			apiClient.post<{ run_id: string; status: string }>(
+				`/api/v1/projects/${projectId}/linear/${integrationId}/sync`,
+				{}
+			)
+	}));
+}
+
+// ─── Generic Delete ──────────────────────────────────────────────────────────
+
 export function useDeleteIntegration(projectId: string) {
 	const queryClient = useQueryClient();
 

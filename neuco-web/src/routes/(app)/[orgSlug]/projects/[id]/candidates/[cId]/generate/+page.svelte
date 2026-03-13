@@ -11,6 +11,7 @@
 	import { Alert, AlertDescription, AlertTitle } from '$lib/components/ui/alert';
 	import { Separator } from '$lib/components/ui/separator';
 	import { toast } from '$lib/components/ui/sonner';
+	import { trackCodegenStarted, trackPrCreated } from '$lib/analytics';
 	import {
 		Clock,
 		CheckCircle2,
@@ -113,6 +114,7 @@
 				{
 					onSuccess: (gen) => {
 						generationId = gen.id;
+						trackCodegenStarted(projectId, candidateId);
 					},
 					onError: (err) => {
 						triggerError = err.message ?? 'Failed to start code generation';
@@ -120,6 +122,15 @@
 					}
 				}
 			);
+		}
+	});
+
+	// ── Track PR creation ────────────────────────────────────────────────────
+	let prTracked = $state(false);
+	$effect(() => {
+		if (generation?.status === 'completed' && generation.prUrl && !prTracked) {
+			prTracked = true;
+			trackPrCreated(projectId, generationId);
 		}
 	});
 

@@ -18,6 +18,7 @@
 		SelectItem
 	} from '$lib/components/ui/select';
 	import { useCreateProject } from '$lib/api/queries/projects';
+	import { trackProjectCreated } from '$lib/analytics';
 	import { detectFramework, parseGitHubRepo, useGitHubRepos } from '$lib/api/queries/github';
 	import type { GitHubRepo } from '$lib/api/queries/github';
 	import { toast } from '$lib/components/ui/sonner';
@@ -285,6 +286,7 @@
 			},
 			{
 				onSuccess: (project: Project) => {
+					trackProjectCreated(project.id, project.name);
 					toast.success(`Project "${project.name}" created successfully`);
 					reset();
 					open = false;

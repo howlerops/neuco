@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 40" fill="none">
+  <!-- Icon mark -->
+  <rect x="2" y="4" width="32" height="32" rx="7" fill="#6366f1"/>
+  <path d="M10 26V14l4 2v6l-4 4z" fill="#fff"/>
+  <path d="M14 16l8 8" stroke="#a5b4fc" stroke-width="2.5" stroke-linecap="round"/>
+  <path d="M22 14v12l4-2V18l-4-4z" fill="#fff"/>
+  <!-- Wordmark (light for dark backgrounds) -->
+  <text x="42" y="27" font-family="system-ui, -apple-system, sans-serif" font-size="20" font-weight="700" fill="#e0e7ff" letter-spacing="-0.5">neuco</text>
+</svg>

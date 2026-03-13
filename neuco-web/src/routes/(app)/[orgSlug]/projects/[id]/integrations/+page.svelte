@@ -9,8 +9,23 @@
 	} from '$lib/api/queries/nango';
 	import {
 		useCreateIntegration,
-		type ExtendedIntegrationProvider
+		useIntegrations,
+		useIntercomDisconnect,
+		useIntercomSync,
+		useSlackDisconnect,
+		useSlackSync,
+		useLinearDisconnect,
+		useLinearSync,
+		useJiraDisconnect,
+		useJiraSync,
+		type ExtendedIntegrationProvider,
+		type IntercomAuthorizeResponse,
+		type SlackAuthorizeResponse,
+		type LinearAuthorizeResponse,
+		type JiraAuthorizeResponse,
+		type IntegrationRecord
 	} from '$lib/api/queries/integrations';
+	import { apiClient } from '$lib/api/client';
 	import { createNangoSession } from '$lib/nango';
 	import { Card, CardContent, CardHeader, CardFooter } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
@@ -36,30 +51,99 @@
 		Loader2,
 		ChevronRight,
 		Webhook,
-		MessageSquare,
-		Zap,
-		FileText,
-		GitBranch,
-		Layout,
-		Phone,
 		Globe,
 		ArrowRight,
 		CheckCircle2,
 		RotateCw
 	} from 'lucide-svelte';
+	import IntegrationIcon from '$lib/components/icons/integrations.svelte';
+	import type { IntegrationIconName } from '$lib/components/icons/integrations.svelte';
 	import { cn } from '$lib/utils';
 
 	const orgSlug = $derived($page.params.orgSlug ?? '');
 	const projectId = $derived($page.params.id ?? '');
 
+	// ── Unified connection type ───────────────────────────────────────────────
+	interface UnifiedConnection {
+		id: string;
+		projectId: string;
+		providerConfigKey: string;
+		connectionId: string;
+		createdAt: string;
+		lastSyncAt?: string | null;
+		/** 'nango' for Nango-managed, 'native' for native integrations */
+		source: 'nango' | 'native';
+	}
+
 	// ── Queries & mutations ────────────────────────────────────────────────────
-	const connectionsQuery = $derived.by(() => useNangoConnections(projectId));
+	const nangoConnectionsQuery = $derived.by(() => useNangoConnections(projectId));
+	const nativeIntegrationsQuery = $derived.by(() => useIntegrations(projectId));
 	const createConnectionMutation = $derived.by(() => useCreateNangoConnection(projectId));
 	const deleteConnectionMutation = $derived.by(() => useDeleteNangoConnection(projectId));
 	const syncMutation = $derived.by(() => useSyncConnection(projectId));
 
+	// Native Intercom mutations
+	const intercomDisconnectMutation = $derived.by(() => useIntercomDisconnect(projectId));
+	const intercomSyncMutation = $derived.by(() => useIntercomSync(projectId));
+
+	// Native Slack mutations
+	const slackDisconnectMutation = $derived.by(() => useSlackDisconnect(projectId));
+	const slackSyncMutation = $derived.by(() => useSlackSync(projectId));
+
+	// Native Linear mutations
+	const linearDisconnectMutation = $derived.by(() => useLinearDisconnect(projectId));
+	const linearSyncMutation = $derived.by(() => useLinearSync(projectId));
+
+	// Native Jira mutations
+	const jiraDisconnectMutation = $derived.by(() => useJiraDisconnect(projectId));
+	const jiraSyncMutation = $derived.by(() => useJiraSync(projectId));
+
 	// Webhook integration mutation (Custom Webhook only — uses existing Make backend)
 	const createWebhookMutation = $derived.by(() => useCreateIntegration(projectId));
+
+	// ── Merged connections list ───────────────────────────────────────────────
+	const connectionsQuery = $derived.by(() => {
+		const nangoLoading = nangoConnectionsQuery.isLoading;
+		const nativeLoading = nativeIntegrationsQuery.isLoading;
+		const isLoading = nangoLoading || nativeLoading;
+		const isError = nangoConnectionsQuery.isError || nativeIntegrationsQuery.isError;
+		const error = nangoConnectionsQuery.error || nativeIntegrationsQuery.error;
+
+		const nangoConns: UnifiedConnection[] = (nangoConnectionsQuery.data ?? []).map((c) => ({
+			id: c.id,
+			projectId: c.projectId,
+			providerConfigKey: c.providerConfigKey,
+			connectionId: c.connectionId,
+			createdAt: c.createdAt,
+			lastSyncAt: c.lastSyncAt,
+			source: 'nango' as const
+		}));
+
+		const nativeConns: UnifiedConnection[] = (nativeIntegrationsQuery.data ?? [])
+			.filter((i) => i.provider !== 'webhook') // webhooks are shown via Nango query
+			.map((i) => ({
+				id: i.id,
+				projectId: i.projectId,
+				providerConfigKey: i.provider,
+				connectionId: i.id, // use integration ID as connection ID
+				createdAt: i.createdAt,
+				lastSyncAt: i.lastSyncAt ?? null,
+				source: 'native' as const
+			}));
+
+		const data = [...nangoConns, ...nativeConns];
+
+		return {
+			isLoading,
+			isError,
+			error,
+			data: isLoading ? undefined : data,
+			refetch: () => {
+				nangoConnectionsQuery.refetch();
+				nativeIntegrationsQuery.refetch();
+			}
+		};
+	});
 
 	// ── Dialog state ──────────────────────────────────────────────────────────
 	let addDialogOpen = $state(false);
@@ -91,8 +175,10 @@
 		description: string;
 		color: string;
 		iconBg: string;
-		/** Nango providerConfigKey. null = Custom Webhook (no Nango). */
+		/** Nango providerConfigKey. null = Custom Webhook or native OAuth. */
 		nangoKey: string | null;
+		/** True if this provider uses native OAuth (not Nango). */
+		nativeOAuth?: boolean;
 	}
 
 	const PROVIDERS: ProviderDef[] = [
@@ -110,7 +196,8 @@
 			description: 'Import support conversations and tickets',
 			color: 'text-blue-600 dark:text-blue-400',
 			iconBg: 'bg-blue-50 dark:bg-blue-950/50',
-			nangoKey: 'intercom'
+			nangoKey: null,
+			nativeOAuth: true
 		},
 		{
 			value: 'slack',
@@ -118,7 +205,8 @@
 			description: 'Import messages from selected channels',
 			color: 'text-pink-600 dark:text-pink-400',
 			iconBg: 'bg-pink-50 dark:bg-pink-950/50',
-			nangoKey: 'slack'
+			nangoKey: null,
+			nativeOAuth: true
 		},
 		{
 			value: 'hubspot',
@@ -134,7 +222,8 @@
 			description: 'Import issues and comments',
 			color: 'text-violet-600 dark:text-violet-400',
 			iconBg: 'bg-violet-50 dark:bg-violet-950/50',
-			nangoKey: 'linear'
+			nangoKey: null,
+			nativeOAuth: true
 		},
 		{
 			value: 'jira',
@@ -142,7 +231,8 @@
 			description: 'Import tickets and comments',
 			color: 'text-cyan-600 dark:text-cyan-400',
 			iconBg: 'bg-cyan-50 dark:bg-cyan-950/50',
-			nangoKey: 'jira'
+			nangoKey: null,
+			nativeOAuth: true
 		},
 		{
 			value: 'notion',
@@ -251,6 +341,178 @@
 		}
 	}
 
+	// ── Native Intercom OAuth flow ───────────────────────────────────────────
+	async function handleConnectIntercom() {
+		dialogStep = 'connecting';
+
+		try {
+			// Fetch the authorize URL from our backend.
+			const authData = await apiClient.get<IntercomAuthorizeResponse>(
+				`/api/v1/projects/${projectId}/intercom/authorize`
+			);
+
+			// Open Intercom OAuth in a popup.
+			const popup = window.open(
+				authData.authorize_url,
+				'intercom-oauth',
+				'width=600,height=700,scrollbars=yes'
+			);
+
+			// Poll for the popup closing (the callback page auto-closes on success).
+			await new Promise<void>((resolve, reject) => {
+				const interval = setInterval(() => {
+					if (!popup || popup.closed) {
+						clearInterval(interval);
+						resolve();
+					}
+				}, 500);
+				// Timeout after 5 minutes.
+				setTimeout(() => {
+					clearInterval(interval);
+					reject(new Error('Authorization timed out'));
+				}, 5 * 60 * 1000);
+			});
+
+			connectedProviderLabel = 'Intercom';
+			dialogStep = 'success';
+		} catch (err) {
+			dialogStep = 'choose';
+			const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+			if (!message.toLowerCase().includes('cancel') && !message.toLowerCase().includes('closed')) {
+				toast.error('Failed to connect Intercom', { description: message });
+			}
+		}
+	}
+
+	// ── Native Slack OAuth flow ──────────────────────────────────────────────
+	async function handleConnectSlack() {
+		dialogStep = 'connecting';
+
+		try {
+			// Fetch the authorize URL from our backend.
+			const authData = await apiClient.get<SlackAuthorizeResponse>(
+				`/api/v1/projects/${projectId}/slack/authorize`
+			);
+
+			// Open Slack OAuth in a popup.
+			const popup = window.open(
+				authData.authorize_url,
+				'slack-oauth',
+				'width=600,height=700,scrollbars=yes'
+			);
+
+			// Poll for the popup closing (the callback page auto-closes on success).
+			await new Promise<void>((resolve, reject) => {
+				const interval = setInterval(() => {
+					if (!popup || popup.closed) {
+						clearInterval(interval);
+						resolve();
+					}
+				}, 500);
+				// Timeout after 5 minutes.
+				setTimeout(() => {
+					clearInterval(interval);
+					reject(new Error('Authorization timed out'));
+				}, 5 * 60 * 1000);
+			});
+
+			connectedProviderLabel = 'Slack';
+			dialogStep = 'success';
+		} catch (err) {
+			dialogStep = 'choose';
+			const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+			if (!message.toLowerCase().includes('cancel') && !message.toLowerCase().includes('closed')) {
+				toast.error('Failed to connect Slack', { description: message });
+			}
+		}
+	}
+
+	// ── Native Jira OAuth flow ─────────────────────────────────────────────
+	async function handleConnectJira() {
+		dialogStep = 'connecting';
+
+		try {
+			// Fetch the authorize URL from our backend.
+			const authData = await apiClient.get<JiraAuthorizeResponse>(
+				`/api/v1/projects/${projectId}/jira/authorize`
+			);
+
+			// Open Jira OAuth in a popup.
+			const popup = window.open(
+				authData.authorize_url,
+				'jira-oauth',
+				'width=600,height=700,scrollbars=yes'
+			);
+
+			// Poll for the popup closing (the callback page auto-closes on success).
+			await new Promise<void>((resolve, reject) => {
+				const interval = setInterval(() => {
+					if (!popup || popup.closed) {
+						clearInterval(interval);
+						resolve();
+					}
+				}, 500);
+				// Timeout after 5 minutes.
+				setTimeout(() => {
+					clearInterval(interval);
+					reject(new Error('Authorization timed out'));
+				}, 5 * 60 * 1000);
+			});
+
+			connectedProviderLabel = 'Jira';
+			dialogStep = 'success';
+		} catch (err) {
+			dialogStep = 'choose';
+			const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+			if (!message.toLowerCase().includes('cancel') && !message.toLowerCase().includes('closed')) {
+				toast.error('Failed to connect Jira', { description: message });
+			}
+		}
+	}
+
+	// ── Native Linear OAuth flow ────────────────────────────────────────────
+	async function handleConnectLinear() {
+		dialogStep = 'connecting';
+
+		try {
+			// Fetch the authorize URL from our backend.
+			const authData = await apiClient.get<LinearAuthorizeResponse>(
+				`/api/v1/projects/${projectId}/linear/authorize`
+			);
+
+			// Open Linear OAuth in a popup.
+			const popup = window.open(
+				authData.authorize_url,
+				'linear-oauth',
+				'width=600,height=700,scrollbars=yes'
+			);
+
+			// Poll for the popup closing (the callback page auto-closes on success).
+			await new Promise<void>((resolve, reject) => {
+				const interval = setInterval(() => {
+					if (!popup || popup.closed) {
+						clearInterval(interval);
+						resolve();
+					}
+				}, 500);
+				// Timeout after 5 minutes.
+				setTimeout(() => {
+					clearInterval(interval);
+					reject(new Error('Authorization timed out'));
+				}, 5 * 60 * 1000);
+			});
+
+			connectedProviderLabel = 'Linear';
+			dialogStep = 'success';
+		} catch (err) {
+			dialogStep = 'choose';
+			const message = err instanceof Error ? err.message : 'An unexpected error occurred.';
+			if (!message.toLowerCase().includes('cancel') && !message.toLowerCase().includes('closed')) {
+				toast.error('Failed to connect Linear', { description: message });
+			}
+		}
+	}
+
 	// ── Custom Webhook flow ───────────────────────────────────────────────────
 	async function handleConnectWebhook() {
 		try {
@@ -275,7 +537,15 @@
 		const def = providerDef(selectedProvider);
 		if (!def) return;
 
-		if (def.nangoKey !== null) {
+		if (def.value === 'slack' && def.nativeOAuth) {
+			await handleConnectSlack();
+		} else if (def.value === 'linear' && def.nativeOAuth) {
+			await handleConnectLinear();
+		} else if (def.value === 'jira' && def.nativeOAuth) {
+			await handleConnectJira();
+		} else if (def.nativeOAuth) {
+			await handleConnectIntercom();
+		} else if (def.nangoKey !== null) {
 			await handleConnectOAuth();
 		} else {
 			await handleConnectWebhook();
@@ -295,9 +565,19 @@
 	}
 
 	// ── Disconnect ────────────────────────────────────────────────────────────
-	async function handleDisconnect(connection: NangoConnection) {
+	async function handleDisconnect(connection: UnifiedConnection) {
 		try {
-			await deleteConnectionMutation.mutateAsync(connection.connectionId);
+			if (connection.source === 'native' && connection.providerConfigKey === 'slack') {
+				await slackDisconnectMutation.mutateAsync(connection.id);
+			} else if (connection.source === 'native' && connection.providerConfigKey === 'linear') {
+				await linearDisconnectMutation.mutateAsync(connection.id);
+			} else if (connection.source === 'native' && connection.providerConfigKey === 'jira') {
+				await jiraDisconnectMutation.mutateAsync(connection.id);
+			} else if (connection.source === 'native') {
+				await intercomDisconnectMutation.mutateAsync(connection.id);
+			} else {
+				await deleteConnectionMutation.mutateAsync(connection.connectionId);
+			}
 			toast.success(`${providerLabel(connection.providerConfigKey)} disconnected`);
 			deleteConfirmId = null;
 		} catch (err) {
@@ -308,12 +588,22 @@
 	}
 
 	// ── Sync now ──────────────────────────────────────────────────────────────
-	async function handleSync(connection: NangoConnection) {
+	async function handleSync(connection: UnifiedConnection) {
 		if (syncingIds.has(connection.connectionId)) return;
 
 		syncingIds = new Set([...syncingIds, connection.connectionId]);
 		try {
-			await syncMutation.mutateAsync(connection.connectionId);
+			if (connection.source === 'native' && connection.providerConfigKey === 'slack') {
+				await slackSyncMutation.mutateAsync(connection.id);
+			} else if (connection.source === 'native' && connection.providerConfigKey === 'linear') {
+				await linearSyncMutation.mutateAsync(connection.id);
+			} else if (connection.source === 'native' && connection.providerConfigKey === 'jira') {
+				await jiraSyncMutation.mutateAsync(connection.id);
+			} else if (connection.source === 'native') {
+				await intercomSyncMutation.mutateAsync(connection.id);
+			} else {
+				await syncMutation.mutateAsync(connection.connectionId);
+			}
 			toast.success(`${providerLabel(connection.providerConfigKey)} sync triggered`);
 		} catch (err) {
 			toast.error('Failed to trigger sync', {
@@ -330,7 +620,7 @@
 	const currentProviderDef = $derived(selectedProvider ? providerDef(selectedProvider) : null);
 
 	const isOAuthProvider = $derived(
-		currentProviderDef !== null && currentProviderDef !== undefined && currentProviderDef.nangoKey !== null
+		currentProviderDef !== null && currentProviderDef !== undefined && (currentProviderDef.nangoKey !== null || currentProviderDef.nativeOAuth === true)
 	);
 
 	const isBusy = $derived(
@@ -432,22 +722,10 @@
 							<!-- Provider icon + name -->
 							<div class="flex items-center gap-2.5 min-w-0">
 								<div class={cn('h-8 w-8 rounded-lg flex items-center justify-center shrink-0', def?.iconBg ?? 'bg-muted')}>
-									{#if connection.providerConfigKey === 'gong'}
-										<Phone class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'intercom'}
-										<MessageSquare class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'slack'}
-										<MessageSquare class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'hubspot'}
-										<Zap class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'linear'}
-										<GitBranch class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'jira'}
-										<FileText class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'notion'}
-										<Layout class="h-4 w-4 {def?.color}" />
-									{:else if connection.providerConfigKey === 'webhook'}
+									{#if connection.providerConfigKey === 'webhook'}
 										<Webhook class="h-4 w-4 {def?.color}" />
+									{:else if ['slack', 'intercom', 'hubspot', 'linear', 'jira', 'gong', 'notion'].includes(connection.providerConfigKey)}
+										<IntegrationIcon name={connection.providerConfigKey as IntegrationIconName} class="h-4 w-4" />
 									{:else}
 										<Globe class="h-4 w-4 {def?.color}" />
 									{/if}
@@ -610,22 +888,10 @@
 					>
 						<!-- Icon -->
 						<div class={cn('h-8 w-8 rounded-md flex items-center justify-center', provider.iconBg)}>
-							{#if provider.value === 'gong'}
-								<Phone class="h-4 w-4 {provider.color}" />
-							{:else if provider.value === 'intercom'}
-								<MessageSquare class="h-4 w-4 {provider.color}" />
-							{:else if provider.value === 'slack'}
-								<MessageSquare class="h-4 w-4 {provider.color}" />
-							{:else if provider.value === 'hubspot'}
-								<Zap class="h-4 w-4 {provider.color}" />
-							{:else if provider.value === 'linear'}
-								<GitBranch class="h-4 w-4 {provider.color}" />
-							{:else if provider.value === 'jira'}
-								<FileText class="h-4 w-4 {provider.color}" />
-							{:else if provider.value === 'notion'}
-								<Layout class="h-4 w-4 {provider.color}" />
-							{:else}
+							{#if provider.value === 'webhook'}
 								<Webhook class="h-4 w-4 {provider.color}" />
+							{:else}
+								<IntegrationIcon name={provider.value as IntegrationIconName} class="h-4 w-4" />
 							{/if}
 						</div>
 						<div>
@@ -641,11 +907,11 @@
 						<!-- Badge: OAuth vs Webhook -->
 						<span class={cn(
 							'text-[10px] font-medium px-1.5 py-0.5 rounded-full',
-							provider.nangoKey !== null
+							(provider.nangoKey !== null || provider.nativeOAuth)
 								? 'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
 								: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
 						)}>
-							{provider.nangoKey !== null ? 'OAuth' : 'Webhook'}
+							{(provider.nangoKey !== null || provider.nativeOAuth) ? 'OAuth' : 'Webhook'}
 						</span>
 					</button>
 				{/each}
@@ -663,7 +929,7 @@
 					{#if isBusy}
 						<Loader2 class="h-3.5 w-3.5 animate-spin" />
 						Connecting…
-					{:else if currentProviderDef?.nangoKey !== null}
+					{:else if currentProviderDef?.nangoKey !== null || currentProviderDef?.nativeOAuth}
 						Connect with OAuth
 						<ArrowRight class="h-3.5 w-3.5" />
 					{:else}

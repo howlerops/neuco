@@ -12,8 +12,16 @@
 			href: `/${orgSlug}/settings`
 		},
 		{
+			label: 'Profile',
+			href: `/${orgSlug}/settings/profile`
+		},
+		{
 			label: 'Members',
 			href: `/${orgSlug}/settings/members`
+		},
+		{
+			label: 'Billing & Usage',
+			href: `/${orgSlug}/settings/billing`
 		},
 		{
 			label: 'Audit Log',

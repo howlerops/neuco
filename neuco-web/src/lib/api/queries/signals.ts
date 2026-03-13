@@ -40,6 +40,7 @@ export function useSignals(projectId: string, params?: SignalFilterParams) {
 			if (params?.source) searchParams.set('source', params.source);
 			if (params?.type) searchParams.set('type', params.type);
 			if (params?.search) searchParams.set('search', params.search);
+			if (params?.excludeDuplicates) searchParams.set('exclude_duplicates', 'true');
 			const qs = searchParams.toString();
 			const raw = await apiClient.get<SignalsBackendResponse>(
 				`/api/v1/projects/${projectId}/signals${qs ? `?${qs}` : ''}`

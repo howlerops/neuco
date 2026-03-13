@@ -110,6 +110,8 @@ export interface Signal {
 	metadata: Record<string, unknown>;
 	createdAt: string;
 	updatedAt: string;
+	contentHash?: string;
+	duplicateOfId?: string | null;
 }
 
 export interface SignalFilterParams extends PageParams {
@@ -117,6 +119,7 @@ export interface SignalFilterParams extends PageParams {
 	type?: SignalType;
 	projectId?: string;
 	search?: string;
+	excludeDuplicates?: boolean;
 }
 
 // ─── Feature Candidates ───────────────────────────────────────────────────────
@@ -275,6 +278,85 @@ export interface Integration {
 	updatedAt: string;
 }
 
+// ─── Billing & Usage ─────────────────────────────────────────────────────────
+
+export type PlanTier = 'starter' | 'builder';
+
+export type SubscriptionStatus = 'active' | 'past_due' | 'canceled' | 'incomplete' | 'trialing';
+
+export interface Subscription {
+	id: string;
+	orgId: string;
+	stripeCustomerId: string;
+	stripeSubscriptionId?: string;
+	planTier: PlanTier;
+	status: SubscriptionStatus;
+	currentPeriodEnd?: string;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface PlanLimits {
+	maxProjects: number;
+	maxSignalsPerMonth: number;
+	maxPrsPerMonth: number;
+}
+
+export interface UsageSummary {
+	limits: PlanLimits;
+	projectCount: number;
+	signalsUsed: number;
+	prsUsed: number;
+	planTier?: PlanTier;
+}
+
+export interface SubscriptionResponse {
+	subscription: Subscription | null;
+	limits: PlanLimits;
+}
+
+// ─── LLM Usage ───────────────────────────────────────────────────────────────
+
+export interface LLMUsageAgg {
+	total_calls: number;
+	total_tokens_in: number;
+	total_tokens_out: number;
+	total_cost_usd: number;
+	avg_latency_ms: number;
+	p95_latency_ms: number;
+}
+
+export interface LLMCall {
+	id: string;
+	project_id: string;
+	pipeline_run_id?: string;
+	pipeline_task_id?: string;
+	provider: string;
+	model: string;
+	call_type: string;
+	tokens_in: number;
+	tokens_out: number;
+	latency_ms: number;
+	cost_usd: number;
+	error?: string;
+	created_at: string;
+}
+
+export interface LLMCallsPage {
+	calls: LLMCall[];
+	total: number;
+}
+
+// ─── Onboarding ──────────────────────────────────────────────────────────────
+
+export type OnboardingStep = 'welcome' | 'org' | 'project' | 'signal' | 'synthesis' | 'done';
+
+export interface OnboardingStatus {
+	completedSteps: OnboardingStep[];
+	isComplete: boolean;
+	totalSteps: number;
+}
+
 // ─── Auth Responses ───────────────────────────────────────────────────────────
 
 export interface AuthResponse {
@@ -326,4 +408,102 @@ export interface UpdateSpecPayload {
 	summary?: string;
 	userStories?: UserStory[];
 	technicalNotes?: string;
+}
+
+// ─── Analytics ────────────────────────────────────────────────────────────────
+
+export interface DailyCount {
+	date: string;
+	count: number;
+}
+
+export interface StatusCount {
+	status: string;
+	count: number;
+}
+
+export interface SourceCount {
+	source: string;
+	count: number;
+}
+
+export interface ProjectAnalytics {
+	id: string;
+	name: string;
+	signalCount: number;
+	candidateCount: number;
+	prCount: number;
+	pipelineCount: number;
+}
+
+export interface MemberActivity {
+	userId: string;
+	displayName: string;
+	signalsUploaded: number;
+	specsGenerated: number;
+	prsCreated: number;
+}
+
+export interface OrgAnalytics {
+	totalSignals: number;
+	totalCandidates: number;
+	totalPrs: number;
+	pipelineSuccessRate: number;
+	signalTrend: DailyCount[];
+	pipelineTrend: DailyCount[];
+	pipelineBreakdown: StatusCount[];
+	candidateBreakdown: StatusCount[];
+	signalsBySource: SourceCount[];
+	projects: ProjectAnalytics[];
+	teamActivity: MemberActivity[];
+}
+
+// ─── Project Context (Memory) ─────────────────────────────────────────────────
+
+export type ContextCategory = 'insight' | 'theme' | 'decision' | 'risk' | 'opportunity';
+
+export interface ProjectContext {
+	id: string;
+	project_id: string;
+	category: ContextCategory;
+	title: string;
+	content: string;
+	source_run_id?: string;
+	metadata?: Record<string, unknown>;
+	created_at: string;
+	updated_at: string;
+}
+
+export interface CreateProjectContextPayload {
+	category: ContextCategory;
+	title: string;
+	content: string;
+}
+
+export interface UpdateProjectContextPayload {
+	category: ContextCategory;
+	title: string;
+	content: string;
+}
+
+// ─── Notifications ────────────────────────────────────────────────────────────
+
+export type NotificationType =
+	| 'pipeline_completed'
+	| 'pipeline_failed'
+	| 'new_candidate'
+	| 'copilot_insight'
+	| 'new_signal_batch'
+	| 'pr_created';
+
+export interface Notification {
+	id: string;
+	orgId: string;
+	userId?: string;
+	type: NotificationType;
+	title: string;
+	body: string;
+	link: string;
+	readAt?: string;
+	createdAt: string;
 }

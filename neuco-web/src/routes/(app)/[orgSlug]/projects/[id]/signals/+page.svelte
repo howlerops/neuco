@@ -29,6 +29,7 @@
 		TableRow
 	} from '$lib/components/ui/table';
 	import { toast } from '$lib/components/ui/sonner';
+	import { trackSignalUploaded } from '$lib/analytics';
 	import {
 		Upload,
 		Radio,
@@ -37,7 +38,8 @@
 		ChevronLeft,
 		ChevronRight,
 		X,
-		Filter
+		Filter,
+		Copy
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
 	import type { SignalSource, SignalType } from '$lib/api/types';
@@ -49,6 +51,7 @@
 	let filterType = $state<SignalType | ''>('');
 	let filterDateFrom = $state('');
 	let filterDateTo = $state('');
+	let excludeDuplicates = $state(false);
 	let currentPage = $state(1);
 	const pageSize = 20;
 
@@ -59,6 +62,7 @@
 		filterType = (sp.get('type') as SignalType) ?? '';
 		filterDateFrom = sp.get('from') ?? '';
 		filterDateTo = sp.get('to') ?? '';
+		excludeDuplicates = sp.get('exclude_duplicates') === 'true';
 		currentPage = parseInt(sp.get('page') ?? '1', 10) || 1;
 	});
 
@@ -72,6 +76,8 @@
 		else sp.delete('from');
 		if (filterDateTo) sp.set('to', filterDateTo);
 		else sp.delete('to');
+		if (excludeDuplicates) sp.set('exclude_duplicates', 'true');
+		else sp.delete('exclude_duplicates');
 		sp.set('page', String(currentPage));
 		goto(`?${sp.toString()}`, { replaceState: true, noScroll: true });
 	}
@@ -81,6 +87,7 @@
 		filterType = '';
 		filterDateFrom = '';
 		filterDateTo = '';
+		excludeDuplicates = false;
 		currentPage = 1;
 		updateSearchParams();
 	}
@@ -91,7 +98,8 @@
 			page: currentPage,
 			pageSize,
 			source: filterSource || undefined,
-			type: filterType || undefined
+			type: filterType || undefined,
+			excludeDuplicates: excludeDuplicates || undefined
 		})
 	);
 
@@ -154,6 +162,7 @@
 			onSuccess: (signals) => {
 				clearInterval(interval);
 				uploadProgress = 100;
+				trackSignalUploaded(projectId, signals.length);
 				setTimeout(() => {
 					uploadProgress = null;
 				}, 1200);
@@ -425,6 +434,21 @@
 			/>
 		</div>
 
+		<!-- Hide duplicates toggle -->
+		<Button
+			variant={excludeDuplicates ? 'default' : 'outline'}
+			size="sm"
+			class="h-9 gap-1.5 text-xs"
+			onclick={() => {
+				excludeDuplicates = !excludeDuplicates;
+				currentPage = 1;
+				updateSearchParams();
+			}}
+		>
+			<Copy class="h-3.5 w-3.5" />
+			Hide duplicates
+		</Button>
+
 		{#if hasActiveFilters}
 			<Button variant="ghost" size="sm" class="h-9 gap-1.5 text-xs" onclick={resetFilters}>
 				<X class="h-3.5 w-3.5" />
@@ -532,12 +556,23 @@
 								</span>
 							</TableCell>
 							<TableCell class="max-w-0">
-								<p
-									class="truncate text-sm text-foreground"
-									title={signal.body || signal.title}
-								>
-									{truncate(signal.body || signal.title)}
-								</p>
+								<div class="flex items-center gap-1.5">
+									<p
+										class="truncate text-sm text-foreground"
+										title={signal.body || signal.title}
+									>
+										{truncate(signal.body || signal.title)}
+									</p>
+									{#if signal.duplicateOfId}
+										<span
+											class="inline-flex shrink-0 items-center gap-1 rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-medium text-orange-800 dark:bg-orange-900/30 dark:text-orange-300"
+											title="Duplicate of another signal"
+										>
+											<Copy class="h-2.5 w-2.5" />
+											Duplicate
+										</span>
+									{/if}
+								</div>
 								{#if signal.title && signal.body}
 									<p class="truncate text-xs text-muted-foreground mt-0.5">
 										{signal.title}

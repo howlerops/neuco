@@ -5,12 +5,14 @@
 	import { onMount } from 'svelte';
 	import { authStore } from '$lib/stores/auth.svelte';
 	import { apiClient } from '$lib/api/client';
+	import { trackLogin, trackSignup } from '$lib/analytics';
 
 	// After the API client's snake→camel transformer, keys are camelCase.
 	// Refresh token is now set as an httpOnly cookie by the backend.
 	interface CallbackResponse {
 		accessToken: string;
 		expiresIn: number;
+		isNew: boolean;
 	}
 
 	let status = $state<'loading' | 'error'>('loading');
@@ -40,6 +42,11 @@
 			});
 
 			authStore.setTokens(data.accessToken, data.expiresIn);
+			if (data.isNew) {
+				trackSignup('github');
+			} else {
+				trackLogin('github');
+			}
 
 			// Redirect to root — the app layout will fetch /me and resolve the user + org
 			goto('/');

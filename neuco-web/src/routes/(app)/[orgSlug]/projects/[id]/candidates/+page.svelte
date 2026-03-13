@@ -21,6 +21,7 @@
 		DropdownMenuLabel
 	} from '$lib/components/ui/dropdown-menu';
 	import { toast } from '$lib/components/ui/sonner';
+	import { trackSynthesisRun } from '$lib/analytics';
 	import {
 		RefreshCw,
 		Lightbulb,
@@ -53,6 +54,7 @@
 	function handleRefresh() {
 		refreshMutation.mutate(undefined, {
 			onSuccess: () => {
+				trackSynthesisRun(projectId);
 				toast.success('Candidate refresh started — results will appear shortly');
 			},
 			onError: (err) => {

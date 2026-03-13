@@ -1,7 +1,8 @@
 import { createQuery, createMutation } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { User } from '$lib/api/types';
+import type { User, Organization } from '$lib/api/types';
 import { authStore } from '$lib/stores/auth.svelte';
+import { resetUser } from '$lib/analytics';
 import { goto } from '$app/navigation';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -9,6 +10,11 @@ import { goto } from '$app/navigation';
 interface LoginResponse {
 	accessToken: string;
 	expiresIn: number;
+}
+
+export interface MeResponse {
+	user: User;
+	orgs: Organization[];
 }
 
 // ─── Query Keys ───────────────────────────────────────────────────────────────
@@ -20,9 +26,9 @@ export const authKeys = {
 // ─── Hooks ────────────────────────────────────────────────────────────────────
 
 export function useMe() {
-	return createQuery<User>(() => ({
+	return createQuery<MeResponse>(() => ({
 		queryKey: authKeys.me(),
-		queryFn: () => apiClient.get<User>('/api/v1/auth/me'),
+		queryFn: () => apiClient.get<MeResponse>('/api/v1/auth/me'),
 		enabled: authStore.isAuthenticated,
 		retry: false,
 		staleTime: 5 * 60 * 1000
@@ -44,6 +50,7 @@ export function useLogout() {
 	return createMutation<void, Error, void>(() => ({
 		mutationFn: () => apiClient.post<void>('/api/v1/auth/logout'),
 		onSettled: () => {
+			resetUser();
 			authStore.clearAuth();
 			goto('/login');
 		}

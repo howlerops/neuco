@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none">
+  <!-- Background -->
+  <rect width="1200" height="630" fill="#0f0d2e"/>
+  <!-- Subtle grid pattern -->
+  <defs>
+    <pattern id="grid" width="60" height="60" patternUnits="userSpaceOnUse">
+      <path d="M 60 0 L 0 0 0 60" fill="none" stroke="#1e1b4b" stroke-width="0.5"/>
+    </pattern>
+  </defs>
+  <rect width="1200" height="630" fill="url(#grid)" opacity="0.5"/>
+  <!-- Accent glow -->
+  <circle cx="600" cy="315" r="300" fill="#6366f1" opacity="0.08"/>
+  <!-- Icon mark (centered, large) -->
+  <g transform="translate(470, 180)">
+    <rect width="96" height="96" rx="21" fill="#6366f1"/>
+    <path d="M24 76V30l12 6v18l-12 12z" fill="#fff"/>
+    <path d="M36 36l24 24" stroke="#a5b4fc" stroke-width="7.5" stroke-linecap="round"/>
+    <path d="M60 30v36l12-6V42L60 30z" fill="#fff"/>
+  </g>
+  <!-- Wordmark -->
+  <text x="582" y="340" font-family="system-ui, -apple-system, sans-serif" font-size="60" font-weight="700" fill="#e0e7ff" letter-spacing="-1" text-anchor="left">neuco</text>
+  <!-- Tagline -->
+  <text x="600" y="400" font-family="system-ui, -apple-system, sans-serif" font-size="22" fill="#818cf8" text-anchor="middle">AI-native product intelligence</text>
+</svg>

@@ -11,6 +11,7 @@
 		Code2,
 		GitBranch,
 		Puzzle,
+		Brain,
 		AlertCircle,
 		ChevronRight
 	} from 'lucide-svelte';
@@ -82,6 +83,12 @@
 			href: `/${orgSlug}/projects/${projectId}/pipelines`,
 			icon: GitBranch,
 			segment: 'pipelines'
+		},
+		{
+			label: 'Memory',
+			href: `/${orgSlug}/projects/${projectId}/memory`,
+			icon: Brain,
+			segment: 'memory'
 		},
 		{
 			label: 'Integrations',
