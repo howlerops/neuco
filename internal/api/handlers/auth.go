@@ -86,11 +86,11 @@ func setRefreshCookie(w http.ResponseWriter, d *Deps, refreshToken string) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    refreshToken,
-		Path:     "/api/v1/auth",
+		Path:     "/api/v1/auth/",
 		MaxAge:   refreshCookieMaxAge,
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 
@@ -100,11 +100,11 @@ func clearRefreshCookie(w http.ResponseWriter, d *Deps) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     refreshCookieName,
 		Value:    "",
-		Path:     "/api/v1/auth",
+		Path:     "/api/v1/auth/",
 		MaxAge:   -1,
 		HttpOnly: true,
 		Secure:   secure,
-		SameSite: http.SameSiteLaxMode,
+		SameSite: http.SameSiteStrictMode,
 	})
 }
 
