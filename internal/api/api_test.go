@@ -705,6 +705,75 @@ func TestSignalUpload(t *testing.T) {
 		resp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/signals", nil, sd.tokenA)
 		assertStatus(t, resp, http.StatusOK)
 	})
+
+	t.Run("upload_plain_text_with_type", func(t *testing.T) {
+		textData := "Users keep asking for a dark mode option.\n\nThe onboarding flow is confusing."
+
+		var buf bytes.Buffer
+		writer := multipart.NewWriter(&buf)
+
+		// Add the type form field.
+		if err := writer.WriteField("type", "bug_report"); err != nil {
+			t.Fatalf("write type field: %v", err)
+		}
+
+		part, err := writer.CreateFormFile("file", "feedback.txt")
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		if _, werr := part.Write([]byte(textData)); werr != nil {
+			t.Fatalf("part write: %v", werr)
+		}
+		if cerr := writer.Close(); cerr != nil {
+			t.Fatalf("writer close: %v", cerr)
+		}
+
+		req, err := http.NewRequest(http.MethodPost, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/signals/upload", &buf)
+		if err != nil {
+			t.Fatalf("new request: %v", err)
+		}
+		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("Authorization", "Bearer "+sd.tokenA)
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("do request: %v", err)
+		}
+		assertStatus(t, resp, http.StatusCreated)
+
+		body := readBody(t, resp)
+		var result struct {
+			Inserted int `json:"inserted"`
+		}
+		if err := json.Unmarshal(body, &result); err != nil {
+			t.Fatalf("unmarshal result: %v", err)
+		}
+		if result.Inserted != 2 {
+			t.Errorf("expected 2 inserted signals, got %d", result.Inserted)
+		}
+
+		// Verify that signals were stored with the correct type.
+		listResp := doRequest(t, http.MethodGet, env.server.URL+"/api/v1/projects/"+project.ID.String()+"/signals?type=bug_report", nil, sd.tokenA)
+		assertStatus(t, listResp, http.StatusOK)
+		listBody := readBody(t, listResp)
+		var listResult struct {
+			Signals []struct {
+				Type string `json:"type"`
+			} `json:"signals"`
+			Total int `json:"total"`
+		}
+		if err := json.Unmarshal(listBody, &listResult); err != nil {
+			t.Fatalf("unmarshal list: %v", err)
+		}
+		if listResult.Total < 2 {
+			t.Errorf("expected at least 2 bug_report signals, got %d", listResult.Total)
+		}
+		for _, s := range listResult.Signals {
+			if s.Type != "bug_report" {
+				t.Errorf("expected signal type bug_report, got %s", s.Type)
+			}
+		}
+	})
 }
 
 func TestCandidateRefresh(t *testing.T) {

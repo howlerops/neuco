@@ -1,26 +1,28 @@
 ---
-name: Roadmap status as of 2026-03-12
-description: Current state of Neuco product roadmap — Phase 9 partially complete, Phase 10 issues created, 3 items blocked on board
+name: Roadmap status as of 2026-03-13
+description: Current state of Neuco product roadmap — v1 plan drafted, pending board + team review, Q1 focus on billing + beta
 type: project
 ---
 
-Phase 9 (Launch Readiness) status as of 2026-03-12:
-- DONE: Token refresh (NEU-3), Stripe (NEU-4), Usage limits (NEU-5), Sentry/logging (NEU-8)
-- IN PROGRESS: Onboarding flow (NEU-6, Founding Engineer)
-- QUEUED: Transactional emails (NEU-7, Founding Engineer)
-- BLOCKED: Prod deploy (NEU-12), Landing page (NEU-13), Domain/DNS (NEU-14) — all need board input
+## Product Roadmap v1 (March 2026 – Feb 2027)
 
-Phase 10 (Early Traction) issues created, assigned to Founding Engineer:
-- NEU-15: Gong integration
-- NEU-16: Intercom integration
-- NEU-17: PostHog analytics
-- NEU-18: LLM observability
+Plan drafted on NEU-65 and assigned to board for review. 4-quarter structure:
 
-Paperclip goals:
-- NEU-10: Launch Readiness (in_progress)
-- NEU-11: Early Traction (todo)
+- **Q1 (Mar-May):** Ship & First Revenue — Billing/Stripe, Google SSO, Gong/HubSpot integrations, beta program (10 customers)
+- **Q2 (Jun-Aug):** Product-Market Fit — Synthesis v2, Vue/Svelte code gen, project memory, self-serve growth. Hire Backend Engineer.
+- **Q3 (Sep-Nov):** Growth & Enterprise — SAML SSO, public API, Product Hunt, advanced integrations. Hire Growth/DevRel.
+- **Q4 (Dec-Feb 2027):** Scale — Advanced AI, self-hosted, platform ecosystem, Series A prep.
 
-Project created: Neuco Platform (5324ca7c)
+## Team Review Subtasks
+- NEU-66: Founding Engineer — technical feasibility (assigned)
+- NEU-67: Designer — UX & design scope (assigned)
+- NEU-68: PM — go-to-market & beta plan (assigned)
 
-**Why:** NEU-9 tasked CEO with building roadmap and keeping work flowing.
-**How to apply:** On each heartbeat, check if board has unblocked NEU-12/13/14. Once unblocked, assign to Founding Engineer or hire if needed. Don't hire until bottleneck shifts from decisions to capacity.
+## Pending Actions
+- Board approves/revises roadmap direction
+- Team provides input on their areas
+- CEO creates goal + epic backlog once direction confirmed
+- Critical path: Billing (1.2) + Beta Program (1.7)
+
+**Why:** Board requested comprehensive roadmap with backlog creation. Iterative process — plan first, get input, then execute.
+**How to apply:** On next heartbeat, check if board has reviewed NEU-65 and team has commented. Once approved, create goals and Q1 epics. Do NOT create full backlog before approval.

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 	mw "github.com/neuco-ai/neuco/internal/api/middleware"
 	"github.com/neuco-ai/neuco/internal/ai"
+	"github.com/neuco-ai/neuco/internal/ai/agents"
 	"github.com/neuco-ai/neuco/internal/domain"
 	"github.com/neuco-ai/neuco/internal/jobs"
 	"github.com/neuco-ai/neuco/internal/store"
@@ -52,14 +53,27 @@ func UploadSignals(d *Deps) http.HandlerFunc {
 		filename := header.Filename
 		now := time.Now().UTC()
 
+		// Optional "type" form field to override the default signal type.
+		signalTypeStr := r.FormValue("type")
+		signalType := domain.SignalTypeFeatureRequest
+		if signalTypeStr != "" {
+			signalType = domain.SignalType(signalTypeStr)
+		}
+
 		isCSV := strings.HasSuffix(strings.ToLower(filename), ".csv") ||
 			strings.Contains(contentType, "csv")
+
+		// For call_transcript type with plain text, route through TranscriptAgent.
+		if !isCSV && signalType == domain.SignalTypeCallTranscript {
+			uploadTranscript(w, r, d, projectID, file, filename)
+			return
+		}
 
 		var signals []domain.Signal
 		if isCSV {
 			signals, err = parseCSVSignals(file, projectID, now)
 		} else {
-			signals, err = parsePlainTextSignals(file, projectID, now)
+			signals, err = parsePlainTextSignals(file, projectID, now, signalType)
 		}
 		if err != nil {
 			respondErr(w, r, http.StatusUnprocessableEntity, "failed to parse file: "+err.Error())
@@ -182,7 +196,7 @@ func parseCSVSignals(r io.Reader, projectID uuid.UUID, now time.Time) ([]domain.
 	return signals, nil
 }
 
-func parsePlainTextSignals(r io.Reader, projectID uuid.UUID, now time.Time) ([]domain.Signal, error) {
+func parsePlainTextSignals(r io.Reader, projectID uuid.UUID, now time.Time, signalType domain.SignalType) ([]domain.Signal, error) {
 	data, err := io.ReadAll(r)
 	if err != nil {
 		return nil, err
@@ -200,7 +214,7 @@ func parsePlainTextSignals(r io.Reader, projectID uuid.UUID, now time.Time) ([]d
 			ID:         uuid.New(),
 			ProjectID:  projectID,
 			Source:     domain.SignalSourceManual,
-			Type:       domain.SignalTypeFeatureRequest,
+			Type:       signalType,
 			Content:    content,
 			Metadata:   json.RawMessage("{}"),
 			OccurredAt: now,
@@ -208,6 +222,60 @@ func parsePlainTextSignals(r io.Reader, projectID uuid.UUID, now time.Time) ([]d
 	}
 
 	return signals, nil
+}
+
+// uploadTranscript processes a plain text file through the TranscriptAgent
+// to extract multiple structured signals from a call transcript.
+func uploadTranscript(w http.ResponseWriter, r *http.Request, d *Deps, projectID uuid.UUID, file io.Reader, filename string) {
+	data, err := io.ReadAll(file)
+	if err != nil {
+		respondErr(w, r, http.StatusUnprocessableEntity, "failed to read file: "+err.Error())
+		return
+	}
+
+	content := strings.TrimSpace(string(data))
+	if content == "" {
+		respondErr(w, r, http.StatusBadRequest, "no content in file")
+		return
+	}
+
+	llm := ai.NewLLMClient(d.Config.AnthropicAPIKey, d.Config.OpenAIAPIKey)
+	agent := agents.NewTranscriptAgent(llm, d.Store)
+
+	extracted, err := agent.Process(r.Context(), projectID, content)
+	if err != nil {
+		respondErr(w, r, http.StatusInternalServerError, "transcript processing failed: "+err.Error())
+		return
+	}
+
+	if len(extracted) == 0 {
+		respondErr(w, r, http.StatusBadRequest, "no signals extracted from transcript")
+		return
+	}
+
+	// Collect IDs for embedding pipeline.
+	signalIDs := make([]uuid.UUID, len(extracted))
+	for i, s := range extracted {
+		signalIDs[i] = s.ID
+	}
+
+	var pipelineRunID string
+	runID, taskIDs, perr := jobs.CreateIngestPipeline(r.Context(), d.Store, projectID)
+	if perr == nil && len(taskIDs) >= 2 {
+		_, _ = d.River.Insert(r.Context(), jobs.EmbedJobArgs{
+			ProjectID: projectID,
+			SignalIDs: signalIDs,
+			RunID:     runID,
+			TaskID:    taskIDs[1],
+		}, &river.InsertOpts{})
+		pipelineRunID = runID.String()
+	}
+
+	orgID := mw.OrgIDFromCtx(r.Context())
+	recordAudit(r.Context(), d, orgID, "signal.upload", "signal", projectID.String(),
+		map[string]any{"inserted": len(extracted), "filename": filename, "type": "call_transcript"})
+
+	respondCreated(w, r, signalUploadResponse{Inserted: len(extracted), PipelineRunID: pipelineRunID})
 }
 
 // ListSignals handles GET /api/v1/projects/{projectId}/signals.
