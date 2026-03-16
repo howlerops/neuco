@@ -316,6 +316,7 @@ type RunAgentJobArgs struct {
 	TaskID       uuid.UUID `json:"task_id"`
 	SandboxID    string    `json:"sandbox_id"`
 	SessionID    uuid.UUID `json:"session_id"`
+	WorkDir      string    `json:"work_dir"`
 }
 
 func (RunAgentJobArgs) Kind() string { return "run_agent" }
@@ -329,6 +330,7 @@ type ValidateOutputJobArgs struct {
 	SandboxID    string    `json:"sandbox_id"`
 	SessionID    uuid.UUID `json:"session_id"`
 	RetryCount   int       `json:"retry_count"`
+	WorkDir      string    `json:"work_dir"`
 }
 
 func (ValidateOutputJobArgs) Kind() string { return "validate_output" }

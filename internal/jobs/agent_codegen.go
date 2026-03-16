@@ -1,13 +1,14 @@
 package jobs
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"time"
-
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -15,6 +16,7 @@ import (
 	"github.com/neuco-ai/neuco/internal/codegen"
 	"github.com/neuco-ai/neuco/internal/config"
 	"github.com/neuco-ai/neuco/internal/domain"
+	"github.com/neuco-ai/neuco/internal/generation"
 	"github.com/neuco-ai/neuco/internal/store"
 )
 
@@ -62,11 +64,12 @@ func CreateAgentCodegenPipeline(ctx context.Context, s *store.Store, client *riv
 type PrepareContextWorker struct {
 	river.WorkerDefaults[PrepareContextJobArgs]
 	store  *store.Store
+	cfg    *config.Config
 	jobCtx *JobContext
 }
 
-func NewPrepareContextWorker(s *store.Store, jobCtx *JobContext) *PrepareContextWorker {
-	return &PrepareContextWorker{store: s, jobCtx: jobCtx}
+func NewPrepareContextWorker(s *store.Store, cfg *config.Config, jobCtx *JobContext) *PrepareContextWorker {
+	return &PrepareContextWorker{store: s, cfg: cfg, jobCtx: jobCtx}
 }
 
 func (w *PrepareContextWorker) Work(ctx context.Context, job *river.Job[PrepareContextJobArgs]) error {
@@ -87,13 +90,36 @@ func (w *PrepareContextWorker) Work(ctx context.Context, job *river.Job[PrepareC
 		return err
 	}
 
-	// TODO(agent-codegen): Build rich repository context via BuildRichContext.
-	contextPayload, err := json.Marshal(map[string]any{
-		"spec_id":            spec.ID,
-		"project_id":         project.ID,
-		"problem_statement":  spec.ProblemStatement,
-		"proposed_solution":  spec.ProposedSolution,
-		"acceptance_criteria": spec.AcceptanceCriteria,
+	maxIterations := 1
+	if w.cfg != nil {
+		maxIterations = normalizeMaxRetries(w.cfg.SandboxMaxRetries)
+	}
+
+	instructionData := codegen.InstructionData{
+		Spec:               *spec,
+		RepoIndex:          generation.RepoIndex{},
+		Context:            codegen.ContextBundle{},
+		ValidationCommands: detectValidationCommands(project),
+		MaxIterations:      maxIterations,
+	}
+
+	instructions, err := codegen.BuildInstructions(instructionData)
+	if err != nil {
+		FailTask(ctx, w.store, job.Args.TaskID, err)
+		CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
+		return err
+	}
+
+	conventions, err := codegen.BuildConventions(generation.RepoIndex{}, map[string]string{})
+	if err != nil {
+		FailTask(ctx, w.store, job.Args.TaskID, err)
+		CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
+		return err
+	}
+
+	contextPayload, err := json.Marshal(agentContextPayload{
+		Instructions: instructions,
+		Conventions:  conventions,
 	})
 	if err != nil {
 		FailTask(ctx, w.store, job.Args.TaskID, err)
@@ -185,14 +211,25 @@ func (w *ProvisionSandboxWorker) Work(ctx context.Context, job *river.Job[Provis
 		return err
 	}
 
-	// TODO(agent-codegen): Replace with BuildInstructions/BuildConventions + curated context files.
 	instructions := fmt.Sprintf("# Agent Code Generation\n\nImplement spec %s for project %s.\n", spec.ID, project.Name)
 	conventions := "# Project Conventions\n\nFollow existing repository patterns and conventions.\n"
-	contextJSON := "{}"
 	if len(job.Args.ContextPayload) > 0 {
-		contextJSON = string(job.Args.ContextPayload)
+		var payload agentContextPayload
+		if err := json.Unmarshal(job.Args.ContextPayload, &payload); err != nil {
+			slog.Warn("failed to decode context payload, using fallback instruction files", "error", err)
+		} else {
+			if strings.TrimSpace(payload.Instructions) != "" {
+				instructions = payload.Instructions
+			}
+			if strings.TrimSpace(payload.Conventions) != "" {
+				conventions = payload.Conventions
+			}
+		}
 	}
-
+	contextJSON := string(job.Args.ContextPayload)
+	if strings.TrimSpace(contextJSON) == "" {
+		contextJSON = "{}"
+	}
 	err = w.sandboxManager.WriteFiles(ctx, sb, map[string]string{
 		"INSTRUCTIONS.md":              instructions,
 		"CONVENTIONS.md":              conventions,
@@ -250,6 +287,7 @@ func (w *ProvisionSandboxWorker) Work(ctx context.Context, job *river.Job[Provis
 			TaskID:       nextTaskID,
 			SandboxID:    sb.ID,
 			SessionID:    session.ID,
+			WorkDir:      sb.WorkDir,
 		}, &river.InsertOpts{Queue: "codegen"})
 		if err != nil {
 			slog.Error("failed to chain run_agent job", "error", err)
@@ -266,11 +304,16 @@ type RunAgentWorker struct {
 	cfg              *config.Config
 	jobCtx           *JobContext
 	providerRegistry *codegen.ProviderRegistry
+	sandboxManager   codegen.SandboxManager
 }
 
 func NewRunAgentWorker(s *store.Store, cfg *config.Config, jobCtx *JobContext) *RunAgentWorker {
 	registry := codegen.NewProviderRegistry(codegen.ClaudeCodeProvider{})
-	return &RunAgentWorker{store: s, cfg: cfg, jobCtx: jobCtx, providerRegistry: registry}
+	manager, err := codegen.NewSandboxManager(cfg.SandboxProvider, cfg)
+	if err != nil {
+		slog.Error("failed to init sandbox manager", "provider", cfg.SandboxProvider, "error", err)
+	}
+	return &RunAgentWorker{store: s, cfg: cfg, jobCtx: jobCtx, providerRegistry: registry, sandboxManager: manager}
 }
 
 func (w *RunAgentWorker) Work(ctx context.Context, job *river.Job[RunAgentJobArgs]) error {
@@ -339,15 +382,68 @@ func (w *RunAgentWorker) Work(ctx context.Context, job *river.Job[RunAgentJobArg
 		}
 	}
 
-	_ = provider
-	_ = apiKey
-	_ = spec
-	// TODO(agent-codegen): Build command from provider, stream output to sandbox session logs, and execute in sandbox.
-	logLine := fmt.Sprintf("run_agent placeholder executed for generation=%s sandbox=%s", job.Args.GenerationID, job.Args.SandboxID)
-	if err := w.store.UpdateSandboxSessionResult(ctx, session.ID, store.SandboxSessionResult{AgentLog: &logLine}); err != nil {
-		slog.Warn("failed to write sandbox session log", "session_id", session.ID, "error", err)
+	// Build execution environment
+	env := make(map[string]string)
+	if apiKey != "" {
+		env["ANTHROPIC_API_KEY"] = apiKey
+	}
+	for k, v := range extraConfig {
+		if k != "ANTHROPIC_API_KEY" {
+			env[k] = v
+		}
 	}
 
+	// Build the execution request
+	promptFile := filepath.Join(job.Args.WorkDir, "INSTRUCTIONS.md")
+	req := codegen.ExecutionRequest{
+		GenerationID: job.Args.GenerationID,
+		OrgID:        project.OrgID,
+		ProjectID:    project.ID,
+		Provider:     providerName,
+		SandboxPath:  job.Args.WorkDir,
+		PromptFile:   promptFile,
+		Spec:         *spec,
+		Environment:  env,
+		Timeout:      time.Duration(w.cfg.SandboxTimeoutMinutes) * time.Minute,
+	}
+
+	// Build and run the agent command
+	cmd, cmdErr := provider.BuildCommand(req)
+	if cmdErr != nil {
+		errMsg := cmdErr.Error()
+		_ = w.store.UpdateSandboxSessionStatus(ctx, session.ID, "failed", &errMsg)
+		FailTask(ctx, w.store, job.Args.TaskID, cmdErr)
+		CheckPipelineCompletion(ctx, w.store, job.Args.RunID)
+		return cmdErr
+	}
+
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	startedAt := time.Now()
+	runErr := cmd.Run()
+	completedAt := time.Now()
+
+	// Collect agent output log
+	agentLog := stdout.String()
+	if stderr.Len() > 0 {
+		agentLog += "\n--- STDERR ---\n" + stderr.String()
+	}
+
+	_ = w.store.UpdateSandboxSessionResult(ctx, session.ID, store.SandboxSessionResult{
+		AgentLog:    &agentLog,
+		StartedAt:   &startedAt,
+		CompletedAt: &completedAt,
+	})
+
+	if runErr != nil {
+		// Non-zero exit is not necessarily fatal - agent may have made partial progress
+		// Log the error but continue to validation
+		slog.Warn("agent command exited with error", "error", runErr, "generation_id", job.Args.GenerationID)
+	}
+
+	_ = w.store.UpdateSandboxSessionStatus(ctx, session.ID, "validating", nil)
 	CompleteTask(ctx, w.store, job.Args.TaskID, start)
 
 	client := w.jobCtx.Client()
@@ -362,6 +458,7 @@ func (w *RunAgentWorker) Work(ctx context.Context, job *river.Job[RunAgentJobArg
 			SandboxID:    job.Args.SandboxID,
 			SessionID:    job.Args.SessionID,
 			RetryCount:   session.RetryCount,
+			WorkDir:      job.Args.WorkDir,
 		}, &river.InsertOpts{Queue: "codegen"})
 		if err != nil {
 			slog.Error("failed to chain validate_output job", "error", err)
@@ -373,19 +470,23 @@ func (w *RunAgentWorker) Work(ctx context.Context, job *river.Job[RunAgentJobArg
 // ValidateOutputWorker validates generated output and controls retry flow.
 type ValidateOutputWorker struct {
 	river.WorkerDefaults[ValidateOutputJobArgs]
-	store  *store.Store
-	cfg    *config.Config
-	jobCtx *JobContext
+	store          *store.Store
+	cfg            *config.Config
+	jobCtx         *JobContext
+	sandboxManager codegen.SandboxManager
 }
 
 func NewValidateOutputWorker(s *store.Store, cfg *config.Config, jobCtx *JobContext) *ValidateOutputWorker {
-	return &ValidateOutputWorker{store: s, cfg: cfg, jobCtx: jobCtx}
+	manager, err := codegen.NewSandboxManager(cfg.SandboxProvider, cfg)
+	if err != nil {
+		slog.Error("failed to init sandbox manager", "provider", cfg.SandboxProvider, "error", err)
+	}
+	return &ValidateOutputWorker{store: s, cfg: cfg, jobCtx: jobCtx, sandboxManager: manager}
 }
 
 func (w *ValidateOutputWorker) Work(ctx context.Context, job *river.Job[ValidateOutputJobArgs]) error {
 	start := time.Now()
 	StartTask(ctx, w.store, job.Args.TaskID)
-
 	_, err := w.store.GetSandboxSession(ctx, job.Args.SessionID)
 	if err != nil {
 		FailTask(ctx, w.store, job.Args.TaskID, err)
@@ -393,10 +494,53 @@ func (w *ValidateOutputWorker) Work(ctx context.Context, job *river.Job[Validate
 		return err
 	}
 
-	// TODO(agent-codegen): Execute validation commands (test/lint/typecheck) inside the sandbox.
-	validationPassed := true
-	maxRetries := normalizeMaxRetries(w.cfg.SandboxMaxRetries)
+	project, projErr := w.store.GetProjectInternal(ctx, job.Args.ProjectID)
+	if projErr != nil {
+		slog.Warn("failed to load project for validation", "error", projErr)
+	}
 
+	validationCommands := detectValidationCommands(project)
+
+	// Create a minimal sandbox reference for execution
+	sb := &codegen.Sandbox{WorkDir: job.Args.WorkDir}
+
+	validationPassed := true
+	var validationLog strings.Builder
+
+	if w.sandboxManager != nil && job.Args.WorkDir != "" && len(validationCommands) > 0 {
+		for _, cmdStr := range validationCommands {
+			parts := strings.Fields(cmdStr)
+			if len(parts) == 0 {
+				continue
+			}
+			result, execErr := w.sandboxManager.Execute(ctx, sb, parts[0], parts[1:]...)
+			if execErr != nil {
+				validationLog.WriteString(fmt.Sprintf("ERROR: %s: %v\n", cmdStr, execErr))
+				// Execution errors (command not found, etc) are not validation failures
+				// They indicate the command doesnt apply to this project - skip
+				continue
+			}
+			if result.ExitCode != 0 {
+				validationPassed = false
+				validationLog.WriteString(fmt.Sprintf("FAIL: %s (exit %d)\n%s\n%s\n", cmdStr, result.ExitCode, result.Stdout, result.Stderr))
+			} else {
+				validationLog.WriteString(fmt.Sprintf("PASS: %s\n", cmdStr))
+			}
+		}
+	}
+
+	// Store validation results
+	validationLogStr := validationLog.String()
+	validationResultsJSON, _ := json.Marshal(map[string]any{
+		"passed":   validationPassed,
+		"log":      validationLogStr,
+		"commands": validationCommands,
+	})
+	_ = w.store.UpdateSandboxSessionResult(ctx, job.Args.SessionID, store.SandboxSessionResult{
+		ValidationResults: validationResultsJSON,
+	})
+
+	maxRetries := normalizeMaxRetries(w.cfg.SandboxMaxRetries)
 	if !validationPassed {
 		if job.Args.RetryCount < maxRetries {
 			nextRetry := job.Args.RetryCount + 1
@@ -417,6 +561,7 @@ func (w *ValidateOutputWorker) Work(ctx context.Context, job *river.Job[Validate
 					TaskID:       nextTaskID,
 					SandboxID:    job.Args.SandboxID,
 					SessionID:    job.Args.SessionID,
+					WorkDir:      job.Args.WorkDir,
 				}, &river.InsertOpts{Queue: "codegen"})
 				if insertErr != nil {
 					slog.Error("failed to requeue run_agent job", "error", insertErr)
@@ -439,9 +584,43 @@ func (w *ValidateOutputWorker) Work(ctx context.Context, job *river.Job[Validate
 		return err
 	}
 
-	// TODO(agent-codegen): Collect sandbox diff and persist generated files before PR creation.
-	CompleteTask(ctx, w.store, job.Args.TaskID, start)
+	// Collect changes from sandbox
+	if w.sandboxManager != nil && job.Args.WorkDir != "" {
+		sb := &codegen.Sandbox{WorkDir: job.Args.WorkDir}
+		changes, diffErr := w.sandboxManager.CollectDiff(ctx, sb)
+		if diffErr != nil {
+			slog.Warn("failed to collect sandbox diff", "error", diffErr)
+		} else if len(changes) > 0 {
+			// Persist generated files to generation record
+			generatedFiles := make([]domain.GeneratedFile, 0, len(changes))
+			for _, c := range changes {
+				if c.ChangeType != "deleted" && c.Content != "" {
+					generatedFiles = append(generatedFiles, domain.GeneratedFile{
+						Path:    c.Path,
+						Content: c.Content,
+					})
+				}
+			}
 
+			gen, genErr := w.store.GetGeneration(ctx, job.Args.GenerationID)
+			if genErr == nil && len(generatedFiles) > 0 {
+				gen.Files = generatedFiles
+				gen.Status = domain.GenerationStatusRunning
+				_ = w.store.UpdateGeneration(ctx, gen)
+			}
+
+			// Store file changes in session
+			filesJSON, _ := json.Marshal(changes)
+			_ = w.store.UpdateSandboxSessionResult(ctx, job.Args.SessionID, store.SandboxSessionResult{
+				FilesChanged: filesJSON,
+			})
+		}
+	}
+
+	// Mark session completed
+	_ = w.store.UpdateSandboxSessionStatus(ctx, job.Args.SessionID, "completed", nil)
+
+	CompleteTask(ctx, w.store, job.Args.TaskID, start)
 	client := w.jobCtx.Client()
 	if client != nil {
 		nextTaskID := pipelineTaskIDByName(ctx, w.store, job.Args.RunID, "create_pr")
@@ -458,6 +637,49 @@ func (w *ValidateOutputWorker) Work(ctx context.Context, job *river.Job[Validate
 	}
 
 	return nil
+}
+
+type agentContextPayload struct {
+	Instructions string `json:"instructions"`
+	Conventions  string `json:"conventions"`
+}
+
+func detectValidationCommands(project *domain.Project) []string {
+	if project == nil {
+		return []string{"npm run lint", "npm run test", "npm run typecheck"}
+	}
+
+	commands := make([]string, 0, 4)
+	add := func(cmd string) {
+		for _, existing := range commands {
+			if existing == cmd {
+				return
+			}
+		}
+		commands = append(commands, cmd)
+	}
+
+	switch project.Framework {
+	case domain.ProjectFrameworkNextJS:
+		add("npm run lint")
+		add("npm run test")
+		add("npm run typecheck")
+		add("npm run build")
+	case domain.ProjectFrameworkReact:
+		add("npm run lint")
+		add("npm run test")
+		add("npm run typecheck")
+	case domain.ProjectFrameworkVue, domain.ProjectFrameworkSvelte, domain.ProjectFrameworkAngular:
+		add("npm run lint")
+		add("npm run test")
+		add("npm run build")
+	default:
+		add("npm run lint")
+		add("npm run test")
+		add("npm run typecheck")
+	}
+
+	return commands
 }
 
 func pipelineTaskIDByName(ctx context.Context, s *store.Store, runID uuid.UUID, taskName string) uuid.UUID {

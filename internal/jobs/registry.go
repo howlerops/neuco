@@ -50,7 +50,7 @@ func RegisterAllWorkers(workers *river.Workers, s *store.Store, cfg *config.Conf
 	river.AddWorker(workers, NewIndexRepoWorker(s, cfg, jobCtx))
 	river.AddWorker(workers, NewBuildContextWorker(s, jobCtx))
 	river.AddWorker(workers, NewGenerateCodeWorker(s, cfg, jobCtx))
-	river.AddWorker(workers, NewPrepareContextWorker(s, jobCtx))
+	river.AddWorker(workers, NewPrepareContextWorker(s, cfg, jobCtx))
 	river.AddWorker(workers, NewProvisionSandboxWorker(s, cfg, jobCtx))
 	river.AddWorker(workers, NewRunAgentWorker(s, cfg, jobCtx))
 	river.AddWorker(workers, NewValidateOutputWorker(s, cfg, jobCtx))
