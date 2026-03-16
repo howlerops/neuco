@@ -237,9 +237,8 @@ func extractKeywords(spec domain.Spec) []string {
 	}
 
 	parts := strings.FieldsFunc(strings.ToLower(builder.String()), func(r rune) bool {
-		return !(unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' || r == '_' || r == '/')
+		return !unicode.IsLetter(r) && !unicode.IsNumber(r) && r != '-' && r != '_' && r != '/'
 	})
-
 	keywords := make([]string, 0, len(parts))
 	seen := make(map[string]struct{}, len(parts))
 	for _, part := range parts {

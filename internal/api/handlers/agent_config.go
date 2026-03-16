@@ -100,8 +100,8 @@ func UpsertAgentConfig(d *Deps) http.HandlerFunc {
 		}
 
 		var encryptedAPIKey []byte
-		switch {
-		case req.APIKey == nil:
+		switch req.APIKey {
+		case nil:
 			if existing != nil {
 				encryptedAPIKey = existing.EncryptedAPIKey
 			}
@@ -120,7 +120,6 @@ func UpsertAgentConfig(d *Deps) http.HandlerFunc {
 				}
 			}
 		}
-
 		modelOverride := req.ModelOverride
 		if modelOverride != nil {
 			trimmed := strings.TrimSpace(*modelOverride)
