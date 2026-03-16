@@ -1534,6 +1534,164 @@ paths:
         "201":
           description: Sync started
 
+  # ──── Agent Config ────────────────────────────────────────────────────────
+  /projects/{projectId}/agent-config:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      tags: [Generations]
+      summary: Get effective agent config for project
+      responses:
+        "200":
+          description: Agent config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentConfig"
+        "404":
+          $ref: "#/components/responses/NotFound"
+    put:
+      tags: [Generations]
+      summary: Create or update agent config
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpsertAgentConfigRequest"
+      responses:
+        "200":
+          description: Updated agent config
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AgentConfig"
+    delete:
+      tags: [Generations]
+      summary: Delete agent config
+      parameters:
+        - name: provider
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "204":
+          description: Agent config deleted
+
+  /projects/{projectId}/agent-config/validate:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    post:
+      tags: [Generations]
+      summary: Validate agent config without saving
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ValidateAgentConfigRequest"
+      responses:
+        "200":
+          description: Validation result
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ValidateAgentConfigResponse"
+
+  /agent-providers:
+    get:
+      tags: [Generations]
+      summary: List available agent providers
+      responses:
+        "200":
+          description: Provider list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/AgentProviderInfo"
+
+  # ──── Sandbox Sessions ────────────────────────────────────────────────────
+  /projects/{projectId}/sessions:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+    get:
+      tags: [Generations]
+      summary: List sandbox sessions for project
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+      responses:
+        "200":
+          description: Session list
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sessions:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/SandboxSession"
+                  total:
+                    type: integer
+
+  /projects/{projectId}/sessions/{sessionId}:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Generations]
+      summary: Get sandbox session detail
+      responses:
+        "200":
+          description: Session detail
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SandboxSession"
+    delete:
+      tags: [Generations]
+      summary: Stop/cancel a sandbox session
+      responses:
+        "204":
+          description: Session cancelled
+
+  /projects/{projectId}/sessions/{sessionId}/stream:
+    parameters:
+      - $ref: "#/components/parameters/projectId"
+      - name: sessionId
+        in: path
+        required: true
+        schema:
+          type: string
+          format: uuid
+    get:
+      tags: [Generations]
+      summary: Stream sandbox session events (SSE)
+      responses:
+        "200":
+          description: Server-Sent Events stream
+          content:
+            text/event-stream:
+              schema:
+                type: string
+
   # ──── Webhooks ────────────────────────────────────────────────────────────
   /webhooks/{projectId}/{secret}:
     parameters:
@@ -2278,3 +2436,145 @@ components:
         updated_by:
           type: string
           format: uuid
+
+    AgentConfig:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        provider:
+          type: string
+        model_override:
+          type: string
+        extra_config:
+          type: object
+          additionalProperties:
+            type: string
+        has_api_key:
+          type: boolean
+        is_default:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UpsertAgentConfigRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+        api_key:
+          type: string
+        model_override:
+          type: string
+        is_default:
+          type: boolean
+        extra_config:
+          type: object
+          additionalProperties:
+            type: string
+
+    ValidateAgentConfigRequest:
+      type: object
+      required: [provider]
+      properties:
+        provider:
+          type: string
+        api_key:
+          type: string
+        model_override:
+          type: string
+        extra_config:
+          type: object
+          additionalProperties:
+            type: string
+
+    ValidateAgentConfigResponse:
+      type: object
+      properties:
+        valid:
+          type: boolean
+        error:
+          type: string
+
+    AgentProviderInfo:
+      type: object
+      properties:
+        name:
+          type: string
+        display_name:
+          type: string
+        install_instructions:
+          type: string
+        installed:
+          type: boolean
+
+    SandboxSession:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        generation_id:
+          type: string
+          format: uuid
+        project_id:
+          type: string
+          format: uuid
+        org_id:
+          type: string
+          format: uuid
+        agent_provider:
+          type: string
+        agent_model:
+          type: string
+        sandbox_provider:
+          type: string
+        sandbox_external_id:
+          type: string
+        status:
+          type: string
+          enum: [pending, provisioning, running, validating, completed, failed, cancelled, timed_out]
+        agent_log:
+          type: string
+        files_changed:
+          type: array
+          items:
+            type: object
+            additionalProperties: true
+        test_results:
+          type: object
+          additionalProperties: true
+        validation_results:
+          type: object
+          additionalProperties: true
+        tokens_used:
+          type: integer
+        cost_usd:
+          type: number
+        retry_count:
+          type: integer
+        max_retries:
+          type: integer
+        error_message:
+          type: string
+        started_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+        created_at:
+          type: string
+          format: date-time
