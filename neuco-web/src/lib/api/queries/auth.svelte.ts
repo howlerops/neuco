@@ -1,6 +1,6 @@
 import { createQuery, createMutation } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { User, Organization } from '$lib/api/types';
+import type { User, Organization } from '$lib/api/types-compat';
 import { authStore } from '$lib/stores/auth.svelte';
 import { resetUser } from '$lib/analytics';
 import { goto } from '$app/navigation';

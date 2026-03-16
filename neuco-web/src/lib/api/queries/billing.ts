@@ -1,6 +1,6 @@
 import { createQuery, createMutation } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { UsageSummary, SubscriptionResponse } from '$lib/api/types';
+import type { UsageSummary, SubscriptionResponse } from '$lib/api/types-compat';
 
 // ─── Query Keys ───────────────────────────────────────────────────────────────
 

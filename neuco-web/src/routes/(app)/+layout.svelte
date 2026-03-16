@@ -27,7 +27,7 @@
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
 	import { identifyUser, resetUser, setGroup } from '$lib/analytics';
-	import type { Organization } from '$lib/api/types';
+	import type { Organization } from '$lib/api/types-compat';
 	import {
 		useNotifications,
 		useUnreadCount,

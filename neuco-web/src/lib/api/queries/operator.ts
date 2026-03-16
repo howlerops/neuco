@@ -1,6 +1,6 @@
 import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { apiClient as api } from '$lib/api/client';
-import type { Organization, User } from '$lib/api/types';
+import type { Organization, User } from '$lib/api/types-compat';
 
 interface OperatorOrg extends Organization {
 	memberCount: number;

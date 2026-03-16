@@ -32,7 +32,7 @@
 		Layers
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
-	import type { ContextCategory, CreateProjectContextPayload } from '$lib/api/types';
+	import type { ContextCategory, CreateProjectContextPayload } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 

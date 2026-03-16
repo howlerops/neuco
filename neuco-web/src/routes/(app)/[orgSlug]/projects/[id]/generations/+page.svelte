@@ -23,7 +23,7 @@
 		RefreshCw,
 		GitPullRequest
 	} from 'lucide-svelte';
-	import type { Generation } from '$lib/api/types';
+	import type { Generation } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const orgSlug = $derived($page.params.orgSlug ?? '');

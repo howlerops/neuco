@@ -19,7 +19,7 @@
 		SkipForward,
 		Check
 	} from 'lucide-svelte';
-	import type { OnboardingStep } from '$lib/api/types';
+	import type { OnboardingStep } from '$lib/api/types-compat';
 
 	// Auth guard
 	$effect(() => {

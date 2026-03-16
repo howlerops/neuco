@@ -1,6 +1,6 @@
 import { createQuery } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { SandboxSession, SandboxSessionPage } from '$lib/api/types';
+import type { SandboxSession, SandboxSessionPage } from '$lib/api/types-compat';
 
 export const sessionKeys = {
 	all: (projectId: string) => ['projects', projectId, 'sessions'] as const,

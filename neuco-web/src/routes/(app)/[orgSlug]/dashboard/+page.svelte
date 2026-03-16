@@ -17,7 +17,7 @@
 		FolderKanban,
 		BarChart3
 	} from 'lucide-svelte';
-	import type { OrgAnalytics, DailyCount, StatusCount, SourceCount, ProjectAnalytics, MemberActivity } from '$lib/api/types';
+	import type { OrgAnalytics, DailyCount, StatusCount, SourceCount, ProjectAnalytics, MemberActivity } from '$lib/api/types-compat';
 
 	const orgSlug = $derived($page.params.orgSlug);
 

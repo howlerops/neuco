@@ -16,7 +16,7 @@
 		ChevronRight
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
-	import type { Framework } from '$lib/api/types';
+	import type { Framework } from '$lib/api/types-compat';
 	import { setContext } from 'svelte';
 
 	let { children } = $props();

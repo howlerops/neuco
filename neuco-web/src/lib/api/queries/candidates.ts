@@ -5,7 +5,7 @@ import type {
 	UpdateCandidateStatusPayload,
 	PageParams,
 	PaginatedResponse
-} from '$lib/api/types';
+} from '$lib/api/types-compat';
 
 // ─── Backend response shapes ──────────────────────────────────────────────────
 // GET /api/v1/projects/{projectId}/candidates returns:

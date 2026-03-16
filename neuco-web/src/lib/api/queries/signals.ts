@@ -1,6 +1,6 @@
 import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { apiClient, transformKeys } from '$lib/api/client';
-import type { Signal, PaginatedResponse, SignalFilterParams } from '$lib/api/types';
+import type { Signal, PaginatedResponse, SignalFilterParams } from '$lib/api/types-compat';
 
 // ─── Backend response shapes ──────────────────────────────────────────────────
 // GET /api/v1/projects/{projectId}/signals returns:

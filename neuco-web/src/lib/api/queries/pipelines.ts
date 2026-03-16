@@ -1,6 +1,6 @@
 import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { PipelineRun, ProjectStats, PageParams, PaginatedResponse } from '$lib/api/types';
+import type { PipelineRun, ProjectStats, PageParams, PaginatedResponse } from '$lib/api/types-compat';
 
 // ─── Backend response shapes ──────────────────────────────────────────────────
 // GET /api/v1/projects/{projectId}/pipelines returns:

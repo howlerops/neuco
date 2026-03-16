@@ -18,7 +18,7 @@
 		RotateCcw,
 		Activity
 	} from 'lucide-svelte';
-	import type { PipelineStatus, PipelineType } from '$lib/api/types';
+	import type { PipelineStatus, PipelineType } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const runId = $derived($page.params.runId ?? '');

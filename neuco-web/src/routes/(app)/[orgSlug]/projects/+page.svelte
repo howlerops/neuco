@@ -15,7 +15,7 @@
 		Github,
 		ArrowRight
 	} from 'lucide-svelte';
-	import type { Framework, Styling } from '$lib/api/types';
+	import type { Framework, Styling } from '$lib/api/types-compat';
 
 	const orgSlug = $derived($page.params.orgSlug ?? '');
 

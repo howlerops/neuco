@@ -8,7 +8,7 @@
 		useDeleteAgentConfig,
 		useValidateAgentConfig
 	} from '$lib/api/queries/agent-config';
-	import type { AgentProviderName } from '$lib/api/types';
+	import type { AgentProviderName } from '$lib/api/types-compat';
 	import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '$lib/components/ui/card';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';

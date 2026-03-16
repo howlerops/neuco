@@ -6,7 +6,7 @@ import type {
 	UpdateProjectContextPayload,
 	PageParams,
 	PaginatedResponse
-} from '$lib/api/types';
+} from '$lib/api/types-compat';
 
 // ─── Backend response shapes ──────────────────────────────────────────────────
 

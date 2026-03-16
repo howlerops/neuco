@@ -34,7 +34,7 @@
 		TrendingUp
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
-	import type { CandidateStatus, CopilotNoteType } from '$lib/api/types';
+	import type { CandidateStatus, CopilotNoteType } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const orgSlug = $derived($page.params.orgSlug ?? '');

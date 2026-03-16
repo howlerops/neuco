@@ -22,7 +22,7 @@
 	import { detectFramework, parseGitHubRepo, useGitHubRepos } from '$lib/api/queries/github';
 	import type { GitHubRepo } from '$lib/api/queries/github';
 	import { toast } from '$lib/components/ui/sonner';
-	import type { Framework, Styling, Project } from '$lib/api/types';
+	import type { Framework, Styling, Project } from '$lib/api/types-compat';
 
 	interface Props {
 		orgId: string;

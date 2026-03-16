@@ -21,7 +21,7 @@
 	import IntegrationIcon from '$lib/components/icons/integrations.svelte';
 	import type { IntegrationIconName } from '$lib/components/icons/integrations.svelte';
 
-	import type { OnboardingStatus } from '$lib/api/types';
+	import type { OnboardingStatus } from '$lib/api/types-compat';
 
 	interface MeResponse {
 		user: { id: string; githubLogin: string; email: string; avatarUrl: string };

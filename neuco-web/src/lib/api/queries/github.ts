@@ -1,6 +1,6 @@
 import { createQuery } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { Framework, Styling } from '$lib/api/types';
+import type { Framework, Styling } from '$lib/api/types-compat';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 

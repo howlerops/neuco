@@ -48,7 +48,7 @@
 		ShieldCheck,
 		Crown
 	} from 'lucide-svelte';
-	import type { OrgRole, OrgMember } from '$lib/api/types';
+	import type { OrgRole, OrgMember } from '$lib/api/types-compat';
 
 	let orgId = $state(authStore.currentOrg?.id ?? '');
 	$effect(() => {

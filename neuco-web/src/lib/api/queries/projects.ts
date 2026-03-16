@@ -1,6 +1,6 @@
 import { createQuery, createMutation, useQueryClient } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { Project, CreateProjectPayload, UpdateProjectPayload } from '$lib/api/types';
+import type { Project, CreateProjectPayload, UpdateProjectPayload } from '$lib/api/types-compat';
 
 // ─── Query Keys ───────────────────────────────────────────────────────────────
 

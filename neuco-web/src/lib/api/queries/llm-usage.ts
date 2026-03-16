@@ -1,6 +1,6 @@
 import { createQuery } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { LLMUsageAgg } from '$lib/api/types';
+import type { LLMUsageAgg } from '$lib/api/types-compat';
 
 // ─── Query Keys ───────────────────────────────────────────────────────────────
 

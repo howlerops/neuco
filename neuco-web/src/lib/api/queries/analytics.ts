@@ -1,6 +1,6 @@
 import { createQuery } from '@tanstack/svelte-query';
 import { apiClient } from '$lib/api/client';
-import type { OrgAnalytics } from '$lib/api/types';
+import type { OrgAnalytics } from '$lib/api/types-compat';
 
 export const analyticsKeys = {
 	all: (orgId: string) => ['orgs', orgId, 'analytics'] as const,

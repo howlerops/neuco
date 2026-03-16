@@ -25,7 +25,7 @@
 		Loader2
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
-	import type { PipelineStatus } from '$lib/api/types';
+	import type { PipelineStatus } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const candidateId = $derived($page.params.cId ?? '');

@@ -27,7 +27,7 @@
 		GitBranch
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
-	import type { UserStory, CopilotNoteType } from '$lib/api/types';
+	import type { UserStory, CopilotNoteType } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const candidateId = $derived($page.params.cId ?? '');

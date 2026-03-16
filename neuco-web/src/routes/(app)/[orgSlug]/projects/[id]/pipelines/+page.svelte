@@ -20,7 +20,7 @@
 		ChevronRight,
 		Filter
 	} from 'lucide-svelte';
-	import type { PipelineRun, PipelineType, PipelineStatus } from '$lib/api/types';
+	import type { PipelineRun, PipelineType, PipelineStatus } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const orgSlug = $derived($page.params.orgSlug ?? '');

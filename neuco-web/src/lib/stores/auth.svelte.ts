@@ -1,5 +1,5 @@
 import { browser } from '$app/environment';
-import type { Organization, User } from '$lib/api/types';
+import type { Organization, User } from '$lib/api/types-compat';
 
 // ─── Persisted Token State ────────────────────────────────────────────────────
 

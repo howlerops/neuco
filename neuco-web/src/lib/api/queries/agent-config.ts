@@ -6,7 +6,7 @@ import type {
 	ValidateAgentConfigPayload,
 	ValidateAgentConfigResponse,
 	AgentProviderInfo
-} from '$lib/api/types';
+} from '$lib/api/types-compat';
 
 export const agentConfigKeys = {
 	all: (projectId: string) => ['projects', projectId, 'agent-config'] as const,

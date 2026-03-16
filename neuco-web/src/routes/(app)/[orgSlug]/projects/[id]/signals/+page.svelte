@@ -42,7 +42,7 @@
 		Copy
 	} from 'lucide-svelte';
 	import { cn } from '$lib/utils';
-	import type { SignalSource, SignalType } from '$lib/api/types';
+	import type { SignalSource, SignalType } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 

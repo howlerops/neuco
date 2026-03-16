@@ -29,7 +29,7 @@
 		Clock,
 		Loader2
 	} from 'lucide-svelte';
-	import type { GeneratedFile, CopilotNote } from '$lib/api/types';
+	import type { GeneratedFile, CopilotNote } from '$lib/api/types-compat';
 
 	const projectId = $derived($page.params.id ?? '');
 	const generationId = $derived($page.params.gId ?? '');
