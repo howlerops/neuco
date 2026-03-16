@@ -520,3 +520,93 @@ export interface Notification {
 	readAt?: string;
 	createdAt: string;
 }
+
+// --- Agent Config (Codegen v2) ---
+
+export type AgentProviderName =
+	| 'claude-code'
+	| 'codex'
+	| 'gemini'
+	| 'opencode'
+	| 'slate'
+	| 'aider'
+	| 'generic';
+
+export interface AgentConfig {
+	id: string;
+	orgId: string;
+	projectId?: string;
+	provider: AgentProviderName;
+	modelOverride?: string;
+	extraConfig?: Record<string, string>;
+	hasApiKey: boolean;
+	isDefault: boolean;
+	createdAt: string;
+	updatedAt: string;
+}
+
+export interface UpsertAgentConfigPayload {
+	provider: AgentProviderName;
+	apiKey?: string;
+	modelOverride?: string;
+	isDefault?: boolean;
+	extraConfig?: Record<string, string>;
+}
+
+export interface ValidateAgentConfigPayload {
+	provider: AgentProviderName;
+	apiKey?: string;
+	modelOverride?: string;
+	extraConfig?: Record<string, string>;
+}
+
+export interface ValidateAgentConfigResponse {
+	valid: boolean;
+	error: string;
+}
+
+export interface AgentProviderInfo {
+	name: AgentProviderName;
+	displayName: string;
+	installInstructions: string;
+	installed: boolean;
+}
+
+export type SandboxSessionStatus =
+	| 'pending'
+	| 'provisioning'
+	| 'running'
+	| 'validating'
+	| 'completed'
+	| 'failed'
+	| 'cancelled'
+	| 'timed_out';
+
+export interface SandboxSession {
+	id: string;
+	generationId: string;
+	projectId: string;
+	orgId: string;
+	agentProvider: string;
+	agentModel?: string;
+	sandboxProvider: string;
+	sandboxExternalId?: string;
+	status: SandboxSessionStatus;
+	agentLog?: string;
+	filesChanged?: unknown[];
+	testResults?: Record<string, unknown>;
+	validationResults?: Record<string, unknown>;
+	tokensUsed?: number;
+	costUsd?: number;
+	retryCount: number;
+	maxRetries: number;
+	errorMessage?: string;
+	startedAt?: string;
+	completedAt?: string;
+	createdAt: string;
+}
+
+export interface SandboxSessionPage {
+	sessions: SandboxSession[];
+	total: number;
+}

@@ -195,6 +195,14 @@ func NewRouter(d *Deps, logger *slog.Logger) http.Handler {
 				r.Get("/{gId}/stream", handlers.StreamGenerationProgress(d))
 			})
 
+			// Sandbox sessions.
+			r.Route("/sessions", func(r chi.Router) {
+				r.Get("/", handlers.ListSandboxSessions(d))
+				r.Get("/{sessionId}", handlers.GetSandboxSessionDetail(d))
+				r.Get("/{sessionId}/stream", handlers.StreamSandboxSession(d))
+				r.Delete("/{sessionId}", handlers.StopSandboxSession(d))
+			})
+
 			// Pipeline runs.
 			r.Route("/pipelines", func(r chi.Router) {
 				r.Get("/", handlers.ListPipelines(d))
